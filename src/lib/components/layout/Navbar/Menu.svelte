@@ -151,6 +151,32 @@
 			saveAs(blob, `chat-export-${Date.now()}.json`);
 		}
 	};
+
+	// CUSTOM: MINIMAL CHAT
+
+	const getChatAsMinimalJSON = async () => {
+		const history = chat.chat.history;
+		const messages = createMessagesList(history, history.currentId);
+
+		return {
+			chat_title: chat.chat.title || chat.title,
+			messages: messages.map((msg) => ({
+				id: msg.id,
+				role: msg.role,
+				content: msg.content,
+				timestamp: msg.timestamp // include if available
+			}))
+		};
+
+	};
+
+	const downloadMinimalJSON = async () => {
+		const minimal = await getChatAsMinimalJSON();
+		const blob = new Blob([JSON.stringify(minimal, null, 2)], {
+			type: 'application/json'
+		});
+		saveAs(blob, `${chat.chat.title}.json`);
+	};
 </script>
 
 <Dropdown
@@ -289,6 +315,12 @@
 					transition={flyAndScale}
 					sideOffset={8}
 				>
+					<DropdownMenu.Item
+						class="flex gap-2 items-center px-3 py-2 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded-md"
+						on:click={downloadMinimalJSON}
+					>
+						<div class="flex items-center line-clamp-1">{$i18n.t('Json file (.json)')}</div>
+					</DropdownMenu.Item>
 					{#if $user?.role === 'admin' || ($user.permissions?.chat?.export ?? true)}
 						<DropdownMenu.Item
 							class="flex gap-2 items-center px-3 py-2 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded-md"
