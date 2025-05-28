@@ -92,6 +92,17 @@
 	onMount(() => {
 		// console.log('UserMessage mounted');
 	});
+
+	function isLikelyCodeOrScript(text: string) {
+    // Heuristics: starts with #class, contains curly braces, or has many indented lines
+    return (
+      text.trim().startsWith('#class') ||
+      text.includes('function') ||
+      text.includes('event ') ||
+      text.includes('{') ||
+      text.split('\n').filter(line => /^\s+/.test(line)).length > 2
+    );
+  }
 </script>
 
 <DeleteConfirmDialog
@@ -236,9 +247,18 @@
 										}`
 									: ' w-full'}"
 							>
-								{#if message.content}
+							{#if message.content} <!-- CUSTOM: Disable Markdown for code blocks -->
+								{#if isLikelyCodeOrScript(message.content)}
+									<div style="white-space: pre-wrap; font-family: monospace;">
+										{message.content}
+									</div>
+								{:else}
 									<Markdown id={message.id} content={message.content} />
 								{/if}
+							{/if}
+								<!-- {#if message.content}
+									<Markdown id={message.id} content={message.content} />
+								{/if} -->
 							</div>
 						</div>
 

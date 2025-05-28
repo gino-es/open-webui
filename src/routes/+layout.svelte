@@ -416,6 +416,13 @@
 		}
 	};
 
+	// // CUSTOM: Force richTextInput to always be false, everywhere
+	settings.subscribe((value) => {
+		if (value.richTextInput !== false) {
+			settings.update((s) => ({ ...s, richTextInput: false }));
+		}
+	});
+
 	onMount(async () => {
 		if (typeof window !== 'undefined' && window.applyTheme) {
 			window.applyTheme();
