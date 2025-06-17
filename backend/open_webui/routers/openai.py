@@ -675,14 +675,98 @@ async def generate_chat_completion(
     is_o_series = payload["model"].lower().startswith(("o1", "o3", "o4"))
     if is_o_series:
         payload = openai_o_series_handler(payload)
-    elif "api.openai.com" not in url:
-        # Remove "max_completion_tokens" from the payload for backward compatibility
-        if "max_completion_tokens" in payload:
-            payload["max_tokens"] = payload["max_completion_tokens"]
-            del payload["max_completion_tokens"]
+        #print(f"After o-series handler: {payload}")
 
-    if "max_tokens" in payload and "max_completion_tokens" in payload:
-        del payload["max_tokens"]
+    # CUSTOM: reroute to /responses endpoint for o3-pro only
+    endpoint = "responses" if (payload["model"] == "o3-pro") else "chat/completions"
+    print(f"Endpoint: {endpoint}")
+
+    # Transform payload for responses endpoint
+    if endpoint == "responses":
+        #print(f"Transforming for responses endpoint")
+        #print(f"Original payload: {payload}")
+        
+        # Transform messages to the format expected by /responses
+        messages = payload["messages"]
+        transformed_messages = []
+        
+        for msg in messages:
+            if msg["role"] == "user":
+                transformed_messages.append({
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": msg["content"]
+                        }
+                    ]
+                })
+            elif msg["role"] == "assistant":
+                transformed_messages.append({
+                    "role": "assistant", 
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": msg["content"]
+                        }
+                    ]
+                })
+            elif msg["role"] == "system":
+                transformed_messages.append({
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text", 
+                            "text": msg["content"]
+                        }
+                    ]
+                })
+
+        # Create new payload with the correct format
+        new_payload = {
+            "model": payload["model"],
+            "input": transformed_messages,
+            "text": {
+                "format": {
+                    "type": "text"
+                }
+            },
+            "reasoning": {
+                "effort": "medium",
+                "summary": "auto"
+            },
+            "tools": [],
+            "store": True
+        }
+        
+        # Add optional parameters if they exist
+        if payload.get("temperature"):
+            new_payload["temperature"] = payload["temperature"]
+        if payload.get("top_p"):
+            new_payload["top_p"] = payload["top_p"]
+        if payload.get("max_tokens"):
+            new_payload["max_output_tokens"] = payload["max_tokens"]
+            
+        # Remove None values
+        new_payload = {k: v for k, v in new_payload.items() if v is not None}
+        
+        # Replace the original payload
+        payload = new_payload
+        #print(f"Transformed payload: {payload}")
+
+    # Remove the duplicate o-series check since we already handled it above
+    # Check if model is from "o" series
+    # is_o_series = payload["model"].lower().startswith(("o1", "o3", "o4"))
+    # if is_o_series:
+    #     payload = openai_o_series_handler(payload)
+    # elif "api.openai.com" not in url:
+    #     # Remove "max_completion_tokens" from the payload for backward compatibility
+    #     if "max_completion_tokens" in payload:
+    #         payload["max_tokens"] = payload["max_completion_tokens"]
+    #         del payload["max_completion_tokens"]
+
+    # if "max_tokens" in payload and "max_completion_tokens" in payload:
+    #     del payload["max_tokens"]
 
     # Convert the modified body back to JSON
     if "logit_bias" in payload:
@@ -691,6 +775,7 @@ async def generate_chat_completion(
         )
 
     payload = json.dumps(payload)
+    print(f"Final JSON payload: {payload}")
 
     r = None
     session = None
@@ -704,7 +789,7 @@ async def generate_chat_completion(
 
         r = await session.request(
             method="POST",
-            url=f"{url}/chat/completions",
+            url=f"{url}/{endpoint}",
             data=payload,
             headers={
                 "Authorization": f"Bearer {key}",
@@ -745,9 +830,74 @@ async def generate_chat_completion(
         else:
             try:
                 response = await r.json()
+                print(f"=== RESPONSE FROM OPENAI ===")
+                print(f"Status: {r.status}")
+                print(f"Response: {json.dumps(response, indent=2)}")
+                
+                # Transform response if it's from /responses endpoint
+                if endpoint == "responses" and r.status == 200 and response is not None:
+                    print("Transforming response from /responses to /chat/completions format")
+                    
+                    # Extract the assistant's message from the response
+                    assistant_message = "No response generated"
+                    
+                    # Safely navigate the response structure
+                    output = response.get("output", [])
+                    if isinstance(output, list):
+                        for output_item in output:
+                            if (isinstance(output_item, dict) and 
+                                output_item.get("type") == "message" and 
+                                output_item.get("role") == "assistant"):
+                                
+                                content = output_item.get("content", [])
+                                if isinstance(content, list):
+                                    for content_item in content:
+                                        if (isinstance(content_item, dict) and 
+                                            content_item.get("type") == "output_text"):
+                                            assistant_message = content_item.get("text", "")
+                                            break
+                                break
+                    
+                    # Transform to chat/completions format (keep the original markup)
+                    transformed_response = {
+                        "id": response.get("id", ""),
+                        "object": "chat.completion",
+                        "created": response.get("created_at", 0),
+                        "model": response.get("model", ""),
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": assistant_message
+                                },
+                                "finish_reason": "stop"
+                            }
+                        ],
+                        "usage": response.get("usage", {})
+                    }
+                    
+                    response = transformed_response
+                    print(f"Transformed response: {json.dumps(response, indent=2)}")
+                
+                # Log the successful response
+                log.info(f"OpenAI API Success - Status: {r.status}")
+                log.info(f"OpenAI API Response: {json.dumps(response, indent=2)}")
             except Exception as e:
-                log.error(e)
+                print(f"=== ERROR PARSING JSON ===")
+                print(f"Error: {e}")
+                log.error(f"Error parsing response as JSON: {e}")
                 response = await r.text()
+                print(f"Raw text response: {response}")
+                log.info(f"OpenAI API Text Response: {response}")
+
+            # Log before raising for status
+            print(f"=== BEFORE RAISE FOR STATUS ===")
+            print(f"Status: {r.status}")
+            log.info(f"Response status: {r.status}")
+            if r.status >= 400:
+                print(f"HTTP Error Response: {response}")
+                log.error(f"HTTP Error Response: {response}")
 
             r.raise_for_status()
             return response
