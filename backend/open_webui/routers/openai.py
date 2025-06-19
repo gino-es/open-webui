@@ -679,7 +679,7 @@ async def generate_chat_completion(
 
     # CUSTOM: reroute to /responses endpoint for o3-pro only
     endpoint = "responses" if (payload["model"] == "o3-pro") else "chat/completions"
-    print(f"Endpoint: {endpoint}")
+    print(f"OpenAI Endpoint: {endpoint}")
 
     # Transform payload for responses endpoint
     if endpoint == "responses":
@@ -775,7 +775,7 @@ async def generate_chat_completion(
         )
 
     payload = json.dumps(payload)
-    print(f"Final JSON payload: {payload}")
+    # print(f"Final JSON payload: {payload}")
 
     r = None
     session = None
@@ -825,18 +825,19 @@ async def generate_chat_completion(
                 headers=dict(r.headers),
                 background=BackgroundTask(
                     cleanup_response, response=r, session=session
-                ),
+                )
             )
+             
         else:
             try:
                 response = await r.json()
-                print(f"=== RESPONSE FROM OPENAI ===")
-                print(f"Status: {r.status}")
-                print(f"Response: {json.dumps(response, indent=2)}")
+                # print(f"=== RESPONSE FROM OPENAI ===")
+                # print(f"Status: {r.status}")
+                # print(f"Response: {json.dumps(response, indent=2)}")
                 
                 # Transform response if it's from /responses endpoint
                 if endpoint == "responses" and r.status == 200 and response is not None:
-                    print("Transforming response from /responses to /chat/completions format")
+                    print("Transforming response back to /chat/completions format")
                     
                     # Extract the assistant's message from the response
                     assistant_message = "No response generated"
@@ -878,11 +879,10 @@ async def generate_chat_completion(
                     }
                     
                     response = transformed_response
-                    print(f"Transformed response: {json.dumps(response, indent=2)}")
+                    # print(f"Transformed response: {json.dumps(response, indent=2)}")
                 
                 # Log the successful response
-                log.info(f"OpenAI API Success - Status: {r.status}")
-                log.info(f"OpenAI API Response: {json.dumps(response, indent=2)}")
+                # log.info(f"OpenAI API Success - Status: {r.status}")
             except Exception as e:
                 print(f"=== ERROR PARSING JSON ===")
                 print(f"Error: {e}")
@@ -892,11 +892,11 @@ async def generate_chat_completion(
                 log.info(f"OpenAI API Text Response: {response}")
 
             # Log before raising for status
-            print(f"=== BEFORE RAISE FOR STATUS ===")
-            print(f"Status: {r.status}")
-            log.info(f"Response status: {r.status}")
+            # print(f"=== BEFORE RAISE FOR STATUS ===")
+            # print(f"Status: {r.status}")
+            # log.info(f"Response status: {r.status}")
             if r.status >= 400:
-                print(f"HTTP Error Response: {response}")
+                # print(f"HTTP Error Response: {response}")
                 log.error(f"HTTP Error Response: {response}")
 
             r.raise_for_status()
