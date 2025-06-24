@@ -736,7 +736,8 @@ async def generate_chat_completion(
                 "summary": "auto"
             },
             "tools": [],
-            "store": True
+            "store": True,
+            "background": True,
         }
         
         # Add optional parameters if they exist
