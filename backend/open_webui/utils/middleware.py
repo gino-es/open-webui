@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import Request, HTTPException
 from starlette.responses import Response, StreamingResponse
 
-
+from open_webui.models.chat_embedding import save_chat_embedding_record
 from open_webui.models.chats import Chats
 from open_webui.models.users import Users
 from open_webui.socket.main import (
@@ -67,6 +67,7 @@ from open_webui.utils.misc import (
     get_last_assistant_message,
     prepend_to_first_user_message_content,
     convert_logit_bias_input_to_json,
+    get_last_user_message_item
 )
 from open_webui.utils.tools import get_tools
 from open_webui.utils.plugin import load_function_module_by_id
@@ -730,6 +731,29 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     user_message = get_last_user_message(form_data["messages"])
     model_knowledge = model.get("info", {}).get("meta", {}).get("knowledge", False)
 
+    # Save user message to embedding table
+    if metadata.get("chat_id"):
+        # Get the actual chat data from database to access proper message IDs
+        chat_data = Chats.get_chat_by_id(metadata["chat_id"])
+        if chat_data:
+            history = chat_data.chat.get("history", {})
+            messages = history.get("messages", {})
+            current_id = history.get("currentId")
+            
+            # Get the parent of the current message (which should be the user message)
+            if current_id and current_id in messages:
+                parent_id = messages[current_id].get("parentId")
+                if parent_id and parent_id in messages:
+                    parent_message = messages[parent_id]
+                    if parent_message.get("role") == "user":
+                        await save_chat_embedding_record(
+                            chat_id=metadata["chat_id"],
+                            user_id=user.id,
+                            role="user",
+                            content=user_message,
+                            message_id=parent_id
+                        )
+
     if model_knowledge:
         await event_emitter(
             {
@@ -1139,6 +1163,15 @@ async def process_chat_response(
                         {
                             "content": content,
                         },
+                    )
+
+                    # Add this: Save to embedding table
+                    await save_chat_embedding_record(
+                        chat_id=metadata["chat_id"],
+                        user_id=user.id,
+                        role="assistant",
+                        content=content,
+                        message_id=metadata["message_id"]
                     )
 
                     # Send a webhook notification if the user is not active
@@ -1831,6 +1864,7 @@ async def process_chat_response(
                                                     ),
                                                 },
                                             )
+
                                         else:
                                             data = {
                                                 "content": serialize_content_blocks(
@@ -2233,6 +2267,15 @@ async def process_chat_response(
                         {
                             "content": serialize_content_blocks(content_blocks),
                         },
+                    )
+
+                    # Add this: Save to embedding table after saving message
+                    await save_chat_embedding_record(
+                        chat_id=metadata["chat_id"],
+                        user_id=user.id,
+                        role="assistant",
+                        content=serialize_content_blocks(content_blocks),
+                        message_id=metadata["message_id"]
                     )
 
                 # Send a webhook notification if the user is not active

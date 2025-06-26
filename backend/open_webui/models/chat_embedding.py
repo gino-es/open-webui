@@ -71,7 +71,7 @@ class ChatEmbeddingTable:
     ) -> Optional[ChatEmbeddingModel]:
         with get_db() as db:
             id = str(uuid.uuid4())
-            ts = int(time.time_ns())
+            ts = int(time.time())
             
             chat_embedding = ChatEmbeddingModel(
                 **{
@@ -140,6 +140,29 @@ class ChatEmbeddingTable:
             db.query(ChatEmbedding).filter_by(id=id).delete()
             db.commit()
             return True
+        
+
+    
+async def save_chat_embedding_record(
+    chat_id: str,
+    user_id: str,
+    role: str,
+    content: str,
+    message_id: str,
+    parent_id: Optional[str] = None
+):
+    """Save a chat message to the embedding table immediately"""
+    form_data = ChatEmbeddingForm(
+        chat_id=chat_id,
+        user_id=user_id,
+        role=role,
+        content=content,
+        message_id=message_id,
+        parent_id=parent_id,
+    )
+    
+    result = ChatEmbeddings.insert_new_chat_embedding(form_data)
+    return result
 
 
 ChatEmbeddings = ChatEmbeddingTable()
