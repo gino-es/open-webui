@@ -469,12 +469,12 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(periodic_usage_pool_cleanup())
 
     # ✅ Add chat embedding worker startup here
-    # await chat_embedding_worker.start()
+    await chat_embedding_worker.start()
 
     yield
 
     # ✅ Add chat embedding worker shutdown here
-    # await chat_embedding_worker.stop()
+    await chat_embedding_worker.stop()
 
 
 app = FastAPI(

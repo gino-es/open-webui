@@ -51,7 +51,7 @@ def upgrade() -> None:
         # Convert embedding to vector type (PostgreSQL only)
         op.execute("""
             ALTER TABLE chat_embedding 
-            ALTER COLUMN embedding TYPE vector(1536) USING embedding::vector(1536)
+            ALTER COLUMN embedding TYPE vector(384) USING embedding::vector(384)
         """)
 
         # Create vector index

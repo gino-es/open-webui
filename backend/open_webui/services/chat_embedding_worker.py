@@ -2,9 +2,10 @@ import asyncio
 import logging
 import time
 from typing import Optional
-from open_webui.models.chat_embedding import ChatEmbeddings, ChatEmbeddingModel
+from open_webui.models.chat_embedding import ChatEmbeddings, ChatEmbeddingModel, ChatEmbedding
 from open_webui.retrieval.utils import get_embedding_function
 from open_webui.config import RAG_EMBEDDING_ENGINE, RAG_EMBEDDING_MODEL
+from open_webui.internal.db import get_db
 
 log = logging.getLogger(__name__)
 
@@ -14,16 +15,23 @@ class ChatEmbeddingWorker:
         self.is_running = False
         self.worker_task = None
         self.batch_size = 10
-        self.sleep_interval = 5  # seconds between checks
+        self.sleep_interval = 10  # seconds between checks
     
     def get_embedding_function(self):
         """Lazy load embedding function"""
         if self.embedding_function is None:
             try:
+                # For local models (default), create the SentenceTransformer
+                if RAG_EMBEDDING_ENGINE.value == "":
+                    from sentence_transformers import SentenceTransformer
+                    ef = SentenceTransformer(RAG_EMBEDDING_MODEL.value)
+                else:
+                    ef = None  # For remote models
+                
                 self.embedding_function = get_embedding_function(
                     embedding_engine=RAG_EMBEDDING_ENGINE.value,
                     embedding_model=RAG_EMBEDDING_MODEL.value,
-                    embedding_function=None,
+                    embedding_function=ef,  # ← Pass the SentenceTransformer for local
                     url="",
                     key="",
                     embedding_batch_size=self.batch_size
@@ -35,58 +43,33 @@ class ChatEmbeddingWorker:
         return self.embedding_function
     
     async def process_pending_embeddings(self):
-        """Process all pending embeddings in batches"""
+        """Process all messages without embeddings"""
         try:
-            # Get pending embeddings
+            # Get messages where embedding is NULL or empty
             pending_messages = ChatEmbeddings.get_messages_without_embeddings(limit=self.batch_size)
             
             if not pending_messages:
                 return 0
             
-            log.info(f"Processing {len(pending_messages)} pending embeddings")
-            
-            # Update status to processing
-            for message in pending_messages:
-                ChatEmbeddings.update_data_by_id(
-                    message.id,
-                    {
-                        "status": "processing",
-                        "started_at": int(time.time())
-                    }
-                )
+            log.info(f"Processing {len(pending_messages)} messages without embeddings")
             
             # Generate embeddings in batch
             embedding_function = self.get_embedding_function()
             contents = [msg.content for msg in pending_messages]
             embeddings = embedding_function(contents)
             
-            # Save embeddings
+            # Save embeddings directly
             for message, embedding in zip(pending_messages, embeddings):
                 ChatEmbeddings.update_embedding_by_id(
                     message.id,
-                    embedding=embedding,
-                    data={
-                        "status": "completed",
-                        "completed_at": int(time.time()),
-                        "model": RAG_EMBEDDING_MODEL.value
-                    }
+                    embedding=embedding
                 )
                 log.info(f"Completed embedding for message {message.message_id}")
             
             return len(pending_messages)
             
         except Exception as e:
-            log.error(f"Error processing pending embeddings: {e}")
-            # Mark failed messages
-            for message in pending_messages:
-                ChatEmbeddings.update_data_by_id(
-                    message.id,
-                    {
-                        "status": "failed",
-                        "error": str(e),
-                        "failed_at": int(time.time())
-                    }
-                )
+            log.error(f"Error processing embeddings: {e}")
             return 0
     
     async def worker_loop(self):
