@@ -405,6 +405,8 @@ from open_webui.tasks import (
 
 from open_webui.utils.redis import get_sentinels_from_env
 
+from open_webui.routers.chat_analytics import router as chat_analytics_router
+
 
 if SAFE_MODE:
     print("SAFE MODE ENABLED")
@@ -1029,6 +1031,11 @@ app.include_router(
 )
 app.include_router(utils.router, prefix="/api/v1/utils", tags=["utils"])
 
+app.include_router(
+    chat_analytics_router,
+    prefix="/api/v1/analytics",
+    tags=["analytics"]
+)
 
 try:
     audit_level = AuditLevel(AUDIT_LOG_LEVEL)

@@ -1,12 +1,16 @@
 import json
 import time
 import uuid
+import logging
 from typing import Optional
 
 from open_webui.internal.db import Base, get_db
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import BigInteger, Column, String, Text, JSON
+from sqlalchemy.sql import text
+
+log = logging.getLogger(__name__)
 
 ####################
 # Chat Embedding DB Schema
@@ -129,7 +133,7 @@ class ChatEmbeddingTable:
             message = db.get(ChatEmbedding, id)
             if message:
                 message.embedding = embedding
-                message.updated_at = int(time.time_ns())
+                message.updated_at = int(time.time())
                 db.commit()
                 db.refresh(message)
                 return ChatEmbeddingModel.model_validate(message)
@@ -140,9 +144,65 @@ class ChatEmbeddingTable:
             db.query(ChatEmbedding).filter_by(id=id).delete()
             db.commit()
             return True
-        
 
-    
+    def search_similar_messages(
+        self, 
+        query_embedding: list[float], 
+        limit: int = 10
+    ) -> list[dict]:
+        """Search for similar chat messages using vector similarity"""
+        with get_db() as db:
+            # DEBUG: Check if table has data
+            count_query = text("SELECT COUNT(*) FROM chat_embedding")
+            count_result = db.execute(count_query)
+            total_count = count_result.scalar()
+            log.info(f"Total records in chat_embedding table: {total_count}")
+            
+            # DEBUG: Check a few sample records
+            sample_query = text("SELECT id, content, embedding FROM chat_embedding LIMIT 3")
+            sample_result = db.execute(sample_query)
+            for row in sample_result:
+                log.info(f"Sample record - ID: {row.id}, Content: {row.content[:50]}...")
+                log.info(f"Embedding type: {type(row.embedding)}, Length: {len(row.embedding) if hasattr(row.embedding, '__len__') else 'N/A'}")
+            
+            # Convert embedding list to PostgreSQL vector format
+            embedding_str = f"[{','.join(map(str, query_embedding))}]"
+            log.info(f"Query embedding length: {len(query_embedding)}")
+            log.info(f"Query embedding sample: {query_embedding[:5]}...")
+            
+            # SQL query for vector similarity search
+            # Use string formatting for the embedding parameter to avoid casting issues
+            query = text(f"""
+                SELECT 
+                    id, chat_id, user_id, role, content, message_id, 
+                    created_at, updated_at,
+                    (embedding::vector) <=> ('{embedding_str}'::vector) as similarity
+                FROM chat_embedding 
+                WHERE embedding IS NOT NULL
+                ORDER BY (embedding::vector) <=> ('{embedding_str}'::vector)
+                LIMIT :limit
+            """)
+            
+            result = db.execute(query, {
+                'limit': limit
+            })
+            
+            return [
+                {
+                    'id': row.id,
+                    'chat_id': row.chat_id,
+                    'user_id': row.user_id,
+                    'role': row.role,
+                    'content': row.content,
+                    'message_id': row.message_id,
+                    'created_at': row.created_at,
+                    'updated_at': row.updated_at,
+                    'similarity': float(row.similarity)
+                }
+                for row in result
+            ]
+
+
 async def save_chat_embedding_record(
     chat_id: str,
     user_id: str,
