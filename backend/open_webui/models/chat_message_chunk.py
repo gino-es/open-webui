@@ -22,7 +22,6 @@ class ChatMessageChunk(Base):
     chunk_id = Column(Text, primary_key=True)
     msg_id = Column(Text, nullable=False)  # Foreign key to chat_message.id
     chunk_no = Column(SmallInteger, nullable=False)  # Order of chunk within message
-    content = Column(Text, nullable=False)  # The actual chunk content
     embedding = Column(Text, nullable=True)  # JSON string of embedding vector
     created_at = Column(BigInteger, nullable=False)
 
@@ -33,7 +32,6 @@ class ChatMessageChunkModel(BaseModel):
     chunk_id: str
     msg_id: str
     chunk_no: int
-    content: str
     embedding: Optional[str] = None
     created_at: int
 
@@ -45,7 +43,6 @@ class ChatMessageChunkModel(BaseModel):
 class ChatMessageChunkForm(BaseModel):
     msg_id: str
     chunk_no: int
-    content: str
 
 
 ####################
@@ -65,7 +62,6 @@ class ChatMessageChunkTable:
                     "chunk_id": chunk_id,
                     "msg_id": form_data.msg_id,
                     "chunk_no": form_data.chunk_no,
-                    "content": form_data.content,
                     "created_at": ts,
                 }
             )
