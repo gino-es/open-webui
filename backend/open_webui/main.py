@@ -92,7 +92,7 @@ from open_webui.models.functions import Functions
 from open_webui.models.models import Models
 from open_webui.models.users import UserModel, Users
 from open_webui.models.chats import Chats
-from open_webui.services.chat_embedding_worker import chat_embedding_worker
+from open_webui.services.chat_enrichment_worker import chat_enrichment_worker
 
 
 from open_webui.config import (
@@ -471,12 +471,12 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(periodic_usage_pool_cleanup())
 
     # ✅ Add chat embedding worker startup here
-    await chat_embedding_worker.start()
+    # await chat_enrichment_worker.start()
 
     yield
 
     # ✅ Add chat embedding worker shutdown here
-    await chat_embedding_worker.stop()
+    # await chat_enrichment_worker.stop()
 
 
 app = FastAPI(

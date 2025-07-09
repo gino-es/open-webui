@@ -21,7 +21,6 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import Request, HTTPException
 from starlette.responses import Response, StreamingResponse
 
-from open_webui.models.chat_embedding import save_chat_embedding_record
 from open_webui.models.chats import Chats
 from open_webui.models.users import Users
 from open_webui.socket.main import (
@@ -92,6 +91,7 @@ from open_webui.env import (
 )
 from open_webui.constants import TASKS
 
+from open_webui.models.chat_message import save_chat_message_record, calculate_turn_number
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
@@ -731,7 +731,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     user_message = get_last_user_message(form_data["messages"])
     model_knowledge = model.get("info", {}).get("meta", {}).get("knowledge", False)
 
-    # Save user message to embedding table
+    # Save user message to chat_message table
     if metadata.get("chat_id"):
         # Get the actual chat data from database to access proper message IDs
         chat_data = Chats.get_chat_by_id(metadata["chat_id"])
@@ -746,10 +746,15 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 if parent_id and parent_id in messages:
                     parent_message = messages[parent_id]
                     if parent_message.get("role") == "user":
-                        await save_chat_embedding_record(
+                        # Calculate turn number
+                        turn_number = calculate_turn_number(chat_data, parent_id)
+                        
+                        # Save to new chat_message table
+                        await save_chat_message_record(
                             chat_id=metadata["chat_id"],
                             user_id=user.id,
                             role="user",
+                            turn_number=turn_number,
                             content=user_message,
                             message_id=parent_id
                         )
@@ -1165,14 +1170,18 @@ async def process_chat_response(
                         },
                     )
 
-                    # Add this: Save to embedding table
-                    await save_chat_embedding_record(
-                        chat_id=metadata["chat_id"],
-                        user_id=user.id,
-                        role="assistant",
-                        content=content,
-                        message_id=metadata["message_id"]
-                    )
+                    # Save to new chat_message table
+                    chat_data = Chats.get_chat_by_id(metadata["chat_id"])
+                    if chat_data:
+                        turn_number = calculate_turn_number(chat_data, metadata["message_id"])
+                        await save_chat_message_record(
+                            chat_id=metadata["chat_id"],
+                            user_id=user.id,
+                            role="assistant",
+                            turn_number=turn_number,
+                            content=content,
+                            message_id=metadata["message_id"]
+                        )
 
                     # Send a webhook notification if the user is not active
                     if not get_active_status_by_user_id(user.id):
@@ -2269,14 +2278,18 @@ async def process_chat_response(
                         },
                     )
 
-                    # Add this: Save to embedding table after saving message
-                    await save_chat_embedding_record(
-                        chat_id=metadata["chat_id"],
-                        user_id=user.id,
-                        role="assistant",
-                        content=serialize_content_blocks(content_blocks),
-                        message_id=metadata["message_id"]
-                    )
+                    # Save to new chat_message table
+                    chat_data = Chats.get_chat_by_id(metadata["chat_id"])
+                    if chat_data:
+                        turn_number = calculate_turn_number(chat_data, metadata["message_id"])
+                        await save_chat_message_record(
+                            chat_id=metadata["chat_id"],
+                            user_id=user.id,
+                            role="assistant",
+                            turn_number=turn_number,
+                            content=serialize_content_blocks(content_blocks),
+                            message_id=metadata["message_id"]
+                        )
 
                 # Send a webhook notification if the user is not active
                 if not get_active_status_by_user_id(user.id):
@@ -2315,6 +2328,19 @@ async def process_chat_response(
                             "content": serialize_content_blocks(content_blocks),
                         },
                     )
+
+                    # Save to new chat_message table
+                    chat_data = Chats.get_chat_by_id(metadata["chat_id"])
+                    if chat_data:
+                        turn_number = calculate_turn_number(chat_data, metadata["message_id"])
+                        await save_chat_message_record(
+                            chat_id=metadata["chat_id"],
+                            user_id=user.id,
+                            role="assistant",
+                            turn_number=turn_number,
+                            content=serialize_content_blocks(content_blocks),
+                            message_id=metadata["message_id"]
+                        )
 
             if response.background is not None:
                 await response.background()
