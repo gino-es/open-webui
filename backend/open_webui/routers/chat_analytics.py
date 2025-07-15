@@ -40,8 +40,6 @@ async def analyze_chat_data(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=result["message"]
             )
-        
-        log.info(f"Analytics completed successfully using tool: {result.get('tool_used', 'unknown')}")
         return AnalyticsResponse(**result)
         
     except Exception as e:

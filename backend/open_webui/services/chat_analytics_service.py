@@ -226,6 +226,11 @@ class ChatAnalyticsService:
                     for row in columns_result:
                         column_info.append(f"  - {row.column_name}: {row.display_type}")
                 
+                # Add example data for timestamp columns
+                if table_name == "user":
+                    column_info.append("  # Example: created_at = 1750745189 (Unix timestamp in seconds)")
+                    column_info.append("  # Example: TO_TIMESTAMP(1750745189) = '2025-07-24 12:33:09'")
+                
                 schema_info.append(f"Table: {table_name}")
                 schema_info.extend(column_info)
                 schema_info.append("")
