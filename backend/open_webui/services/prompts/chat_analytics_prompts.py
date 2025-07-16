@@ -36,58 +36,48 @@ You are a SQL expert. Given a question and database schema, write a SQL query to
 IMPORTANT RULES:
 1. Only use tables and columns that exist in the schema
 2. Use PostgreSQL syntax
-3. For date/time operations, use PostgreSQL functions
-4. Be careful with column names - use exact names from schema
-5. If a column doesn't exist, don't use it
-6. Return ONLY the SQL query, no markdown formatting, no code blocks, no explanations
+3. Be careful with column names - use exact names from schema
+4. Return ONLY the SQL query, no markdown formatting, no code blocks, no explanations
+
+TIMESTAMP TEMPLATES (use these exact patterns):
+- Recent users: WHERE TO_TIMESTAMP(created_at) >= NOW() - INTERVAL '1 month'
+- This year: WHERE TO_TIMESTAMP(created_at) >= DATE_TRUNC('year', NOW())
+- Last 7 days: WHERE TO_TIMESTAMP(created_at) >= NOW() - INTERVAL '7 days'
+- Date range: WHERE TO_TIMESTAMP(created_at) BETWEEN '2024-01-01' AND '2024-12-31'
+- Order by date: ORDER BY TO_TIMESTAMP(created_at) DESC
 
 Database Schema:
 {schema}
 
 Question: {question}
 
-Write a SQL query that answers this question. Return ONLY the SQL query, nothing else.
+Write a SQL query that answers this question. Use the timestamp templates above for any date operations.
 
 SQL Query: """
 )
 
-# RAG response prompt
-RAG_RESPONSE_PROMPT = PromptTemplate(
-    input_variables=["question", "context", "sql_results"],
-    template="""
-You are an AI assistant that provides comprehensive answers based on multiple sources of information.
+# Final analysis prompt for synthesizing all data sources
+FINAL_ANALYSIS_PROMPT = """
+You are an AI analyst specializing in chat analytics for an AI assistant platform. Your role is to provide comprehensive insights to administrators about user interactions, system usage, and conversation patterns.
 
-Question: {question}
+User Question: {question}
 
-Context from vector search (if any):
-{context}
+Available Data:
+{context_parts}
 
-SQL query results (if any):
-{sql_results}
+Please provide a comprehensive analysis that:
 
-Provide a comprehensive answer that combines all available information. Be specific and detailed.
+1. **Directly answers the admin's question** using any available data
+2. **Quantitative Analysis**: If SQL data is available, highlight key metrics, trends, and statistics
+3. **Qualitative Analysis**: If vector search results are available, analyze conversation themes, user sentiment, and content patterns
+4. **Cross-references**: Connect quantitative data with qualitative insights when both are available
+5. **Actionable Insights**: Provide recommendations or observations that could help improve the platform
+6. **Context**: Explain what the data means in the context of an AI chat platform
 
-Answer: """
-)
+Guidelines:
+- Be specific and reference exact numbers, dates, or content when available
+- If no data was found or no data was needed for the query, provide a helpful response based on your knowledge
+- Focus on insights that would be valuable for platform administrators
+- Use clear, professional language suitable for business reporting
 
-# Combined analysis prompt
-COMBINED_ANALYSIS_PROMPT = """
-You are an AI analyst that provides comprehensive insights by combining quantitative data and qualitative content analysis.
-
-Question: {question}
-
-Quantitative Data (SQL Results):
-{sql_results_str}
-
-Qualitative Content (Vector Search Results):
-{context}
-
-Provide a comprehensive analysis that:
-1. Summarizes the quantitative findings
-2. Analyzes the qualitative content and themes
-3. Connects the data with the content insights
-4. Provides actionable insights and conclusions
-
-Make sure to reference specific numbers from the SQL results and specific themes from the content analysis.
-
-Analysis: """ 
+Answer:""" 

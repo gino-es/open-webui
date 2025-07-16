@@ -7,7 +7,7 @@ from typing import Optional, List, Dict, Any
 from open_webui.internal.db import Base, get_db
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import BigInteger, Column, String, Text, Integer, Float
+from sqlalchemy import BigInteger, Column, String, Text, JSON, Integer, Float, SmallInteger
 from sqlalchemy.sql import text
 
 log = logging.getLogger(__name__)
@@ -25,13 +25,22 @@ class ChatMessage(Base):
     role = Column(Text, nullable=False)  # 'user' or 'assistant'
     turn_number = Column(Integer, nullable=False)
     content = Column(Text, nullable=False)
-    intent = Column(Text, nullable=True)  # LLM classification
-    topic = Column(Text, nullable=True)   # LLM classification
-    sentiment = Column(Float, nullable=True)  # LLM classification (-1.0 to 1.0)
-    message_id = Column(Text, nullable=True)  # Original message ID from chat JSON
+    intent = Column(Text, nullable=True)
+    topic = Column(Text, nullable=True)
+    sentiment = Column(Float, nullable=True)
+    message_id = Column(Text, nullable=True)
     created_at = Column(BigInteger, nullable=False)
     updated_at = Column(BigInteger, nullable=False)
-    embedding = Column(Text, nullable=True)  # JSON string of embedding vector
+    embedding = Column(Text, nullable=True)
+
+
+class ChatMessageChunk(Base):
+    __tablename__ = "chat_message_chunk"
+    
+    chunk_id = Column(Text, primary_key=True)
+    msg_id = Column(Text, nullable=False)
+    chunk_no = Column(SmallInteger, nullable=False)
+    embedding = Column(Text, nullable=True)
 
 
 class ChatMessageModel(BaseModel):
@@ -52,6 +61,15 @@ class ChatMessageModel(BaseModel):
     embedding: Optional[str] = None
 
 
+class ChatMessageChunkModel(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
+    chunk_id: str
+    msg_id: str
+    chunk_no: int
+    embedding: Optional[str] = None
+
+
 ####################
 # Forms
 ####################
@@ -62,45 +80,10 @@ class ChatMessageForm(BaseModel):
     role: str
     turn_number: int
     content: str
-    message_id: Optional[str] = None
-
-
-class ChatMessageUpdateForm(BaseModel):
     intent: Optional[str] = None
     topic: Optional[str] = None
     sentiment: Optional[float] = None
-    embedding: Optional[str] = None
-
-
-####################
-# Utility Functions
-####################
-
-def calculate_turn_number(chat_data, message_id):
-    """Calculate turn number based on message hierarchy"""
-    if not chat_data or not message_id:
-        return 1
-    
-    history = chat_data.chat.get("history", {})
-    messages = history.get("messages", {})
-    
-    if message_id not in messages:
-        return 1
-    
-    # Count all messages in the conversation up to this point
-    turn_number = 1
-    current_message = messages[message_id]
-    
-    # Traverse up the parent chain to count all messages
-    while current_message and current_message.get("parentId"):
-        parent_id = current_message["parentId"]
-        if parent_id in messages:
-            turn_number += 1
-            current_message = messages[parent_id]
-        else:
-            break
-    
-    return turn_number
+    message_id: Optional[str] = None
 
 
 ####################
@@ -108,6 +91,142 @@ def calculate_turn_number(chat_data, message_id):
 ####################
 
 class ChatMessageTable:
+    def search_similar_messages(
+        self, 
+        query_embedding: list[float], 
+        limit: int = 10,
+        search_chunks: bool = False,
+        filters: Optional[dict] = None
+    ) -> list[dict]:
+        """Search for similar chat messages using vector similarity"""
+        with get_db() as db:
+            # Convert embedding list to PostgreSQL vector format
+            embedding_str = f"[{','.join(map(str, query_embedding))}]"
+            
+            # Build WHERE clause for filters
+            where_conditions = ["embedding IS NOT NULL"]
+            params = {'limit': limit}
+            
+            if filters:
+                if filters.get('role'):
+                    where_conditions.append("role = :role")
+                    params['role'] = filters['role']
+                if filters.get('intent'):
+                    where_conditions.append("intent = :intent")
+                    params['intent'] = filters['intent']
+                if filters.get('topic'):
+                    where_conditions.append("topic = :topic")
+                    params['topic'] = filters['topic']
+                if filters.get('user_id'):
+                    where_conditions.append("user_id = :user_id")
+                    params['user_id'] = filters['user_id']
+                if filters.get('chat_id'):
+                    where_conditions.append("chat_id = :chat_id")
+                    params['chat_id'] = filters['chat_id']
+            
+            where_clause = " AND ".join(where_conditions)
+            
+            if search_chunks:
+                # Search in chunks table
+                query = text(f"""
+                    SELECT 
+                        cm.id, cm.chat_id, cm.user_id, cm.role, cm.turn_number,
+                        cm.content, cm.intent, cm.topic, cm.sentiment, cm.message_id,
+                        cm.created_at, cm.updated_at,
+                        cmc.chunk_id, cmc.chunk_no,
+                        (cmc.embedding::vector) <=> ('{embedding_str}'::vector) as similarity
+                    FROM chat_message_chunk cmc
+                    JOIN chat_message cm ON cmc.msg_id = cm.id
+                    WHERE {where_clause.replace('embedding IS NOT NULL', 'cmc.embedding IS NOT NULL')}
+                    ORDER BY (cmc.embedding::vector) <=> ('{embedding_str}'::vector)
+                    LIMIT :limit
+                """)
+            else:
+                # Search in main messages table
+                query = text(f"""
+                    SELECT 
+                        id, chat_id, user_id, role, turn_number, content, intent, topic, sentiment,
+                        message_id, created_at, updated_at,
+                        (embedding::vector) <=> ('{embedding_str}'::vector) as similarity
+                    FROM chat_message 
+                    WHERE {where_clause}
+                    ORDER BY (embedding::vector) <=> ('{embedding_str}'::vector)
+                    LIMIT :limit
+                """)
+            
+            result = db.execute(query, params)
+            
+            return [
+                {
+                    'id': row.id,
+                    'chat_id': row.chat_id,
+                    'user_id': row.user_id,
+                    'role': row.role,
+                    'turn_number': row.turn_number,
+                    'content': row.content,
+                    'intent': row.intent,
+                    'topic': row.topic,
+                    'sentiment': row.sentiment,
+                    'message_id': row.message_id,
+                    'created_at': row.created_at,
+                    'updated_at': row.updated_at,
+                    'chunk_id': getattr(row, 'chunk_id', None),
+                    'chunk_no': getattr(row, 'chunk_no', None),
+                    'similarity': float(row.similarity)
+                }
+                for row in result
+            ]
+
+    def search_by_intent_topic(
+        self,
+        intent: Optional[str] = None,
+        topic: Optional[str] = None,
+        limit: int = 50
+    ) -> list[dict]:
+        """Search messages by intent and/or topic"""
+        with get_db() as db:
+            where_conditions = []
+            params = {'limit': limit}
+            
+            if intent:
+                where_conditions.append("intent = :intent")
+                params['intent'] = intent
+            if topic:
+                where_conditions.append("topic = :topic")
+                params['topic'] = topic
+            
+            where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+            
+            query = text(f"""
+                SELECT 
+                    id, chat_id, user_id, role, turn_number, content, intent, topic, sentiment,
+                    message_id, created_at, updated_at
+                FROM chat_message 
+                WHERE {where_clause}
+                ORDER BY created_at DESC
+                LIMIT :limit
+            """)
+            
+            result = db.execute(query, params)
+            
+            return [
+                {
+                    'id': row.id,
+                    'chat_id': row.chat_id,
+                    'user_id': row.user_id,
+                    'role': row.role,
+                    'turn_number': row.turn_number,
+                    'content': row.content,
+                    'intent': row.intent,
+                    'topic': row.topic,
+                    'sentiment': row.sentiment,
+                    'message_id': row.message_id,
+                    'created_at': row.created_at,
+                    'updated_at': row.updated_at
+                }
+                for row in result
+            ]
+
     def insert_new_chat_message(
         self, form_data: ChatMessageForm
     ) -> Optional[ChatMessageModel]:
@@ -213,78 +332,6 @@ class ChatMessageTable:
             db.commit()
             return True
 
-    def search_similar_messages(
-        self, 
-        query_embedding: List[float], 
-        limit: int = 10,
-        intent_filter: Optional[str] = None,
-        topic_filter: Optional[str] = None,
-        sentiment_min: Optional[float] = None,
-        sentiment_max: Optional[float] = None
-    ) -> List[Dict[str, Any]]:
-        """Search for similar chat messages using vector similarity"""
-        with get_db() as db:
-            # Convert embedding list to PostgreSQL vector format
-            embedding_str = f"[{','.join(map(str, query_embedding))}]"
-            
-            # Build the base query
-            base_query = """
-                SELECT 
-                    id, chat_id, user_id, role, turn_number, content, 
-                    intent, topic, sentiment, message_id, created_at, updated_at,
-                    (embedding::vector) <=> (:query_embedding::vector) as similarity
-                FROM chat_message 
-                WHERE embedding IS NOT NULL
-            """
-            
-            # Add filters
-            filters = []
-            params = {'query_embedding': embedding_str, 'limit': limit}
-            
-            if intent_filter:
-                filters.append("intent = :intent_filter")
-                params['intent_filter'] = intent_filter
-            
-            if topic_filter:
-                filters.append("topic = :topic_filter")
-                params['topic_filter'] = topic_filter
-            
-            if sentiment_min is not None:
-                filters.append("sentiment >= :sentiment_min")
-                params['sentiment_min'] = sentiment_min
-            
-            if sentiment_max is not None:
-                filters.append("sentiment <= :sentiment_max")
-                params['sentiment_max'] = sentiment_max
-            
-            if filters:
-                base_query += " AND " + " AND ".join(filters)
-            
-            # Add ordering and limit
-            base_query += " ORDER BY similarity LIMIT :limit"
-            
-            query = text(base_query)
-            result = db.execute(query, params)
-            
-            return [
-                {
-                    'id': row.id,
-                    'chat_id': row.chat_id,
-                    'user_id': row.user_id,
-                    'role': row.role,
-                    'turn_number': row.turn_number,
-                    'content': row.content,
-                    'intent': row.intent,
-                    'topic': row.topic,
-                    'sentiment': row.sentiment,
-                    'message_id': row.message_id,
-                    'created_at': row.created_at,
-                    'updated_at': row.updated_at,
-                    'similarity': float(row.similarity)
-                }
-                for row in result
-            ]
-
     def get_statistics(self) -> Dict[str, Any]:
         """Get statistics about chat messages"""
         with get_db() as db:
@@ -339,6 +386,37 @@ class ChatMessageTable:
                 'topic_distribution': topic_distribution,
                 'average_sentiment': float(avg_sentiment) if avg_sentiment else 0.0
             }
+
+
+####################
+# Utility Functions
+####################
+
+def calculate_turn_number(chat_data, message_id):
+    """Calculate turn number based on message hierarchy"""
+    if not chat_data or not message_id:
+        return 1
+    
+    history = chat_data.chat.get("history", {})
+    messages = history.get("messages", {})
+    
+    if message_id not in messages:
+        return 1
+    
+    # Count all messages in the conversation up to this point
+    turn_number = 1
+    current_message = messages[message_id]
+    
+    # Traverse up the parent chain to count all messages
+    while current_message and current_message.get("parentId"):
+        parent_id = current_message["parentId"]
+        if parent_id in messages:
+            turn_number += 1
+            current_message = messages[parent_id]
+        else:
+            break
+    
+    return turn_number
 
 
 async def save_chat_message_record(

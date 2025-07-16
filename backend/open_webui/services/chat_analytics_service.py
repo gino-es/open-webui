@@ -14,7 +14,7 @@ from open_webui.internal.db import get_db, engine
 from open_webui.services.prompts.chat_analytics_prompts import (
     SQL_GENERATION_PROMPT,
     TOOL_SELECTION_PROMPT,
-    COMBINED_ANALYSIS_PROMPT
+    FINAL_ANALYSIS_PROMPT,
 )
 
 log = logging.getLogger(__name__)
@@ -22,71 +22,12 @@ log = logging.getLogger(__name__)
 class ChatAnalyticsService:
     
     def __init__(self, model_id: str):
-        self.retriever = ChatAnalyticsRetriever(top_k=10)
+        self.retriever = ChatAnalyticsRetriever()
         self.allowed_tables = ["user", "chat", "chat_message", "chat_message_chunk"]
         self.tool_types = ["SQL_QUERY", "VECTOR_SEARCH"]
 
         self.control_llm = ChatOpenAI(model="gpt-4.1", temperature=0)
         self.answer_llm = ChatOpenAI(model=model_id, temperature=0.1)
-    
-    def perform_vector_search(self, query: str) -> Dict[str, Any]:
-        try:
-            # Get relevant documents
-            documents = self.retriever._get_relevant_documents(query, run_manager=None)
-            
-            # Extract content and metadata
-            sources = []
-            for doc in documents:
-                sources.append({
-                    "content": doc.page_content,
-                    "role": doc.metadata.get("role"),
-                    "user_id": doc.metadata.get("user_id"),
-                    "created_at": doc.metadata.get("created_at"),
-                    "similarity": doc.metadata.get("similarity")
-                })
-            
-            return {
-                "success": True,
-                "sources": sources,
-                "count": len(sources)
-            }
-            
-        except Exception as e:
-            log.error(f"Error in vector search: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "sources": []
-            }
-    
-    def combine_results_with_rag(self, query: str, sql_results: Dict[str, Any], vector_results: Dict[str, Any]) -> str:
-        try:
-            # Format context from vector search
-            context = ""
-            if vector_results.get("success") and vector_results.get("sources"):
-                context_parts = []
-                for source in vector_results["sources"][:5]:  
-                    context_parts.append(f"- {source['content'][:300]}...")
-                context = "\n".join(context_parts)
-            
-            # Format SQL results
-            sql_results_str = ""
-            if sql_results.get("success") and sql_results.get("results"):
-                sql_results_str = f"Query: {sql_results['sql_query']}\nResults: {json.dumps(sql_results['results'], indent=2)}"
-            
-            # Use the combined analysis prompt
-            combined_prompt = COMBINED_ANALYSIS_PROMPT.format(
-                question=query,
-                sql_results_str=sql_results_str,
-                context=context
-            )
-            
-            response = self.answer_llm.invoke(combined_prompt)
-            return response.content
-            
-        except Exception as e:
-            log.error(f"Error combining results: {e}")
-            return f"Error combining results: {str(e)}"
 
 
     #########################################################################################
@@ -423,10 +364,42 @@ class ChatAnalyticsService:
             log.error(f"Error applying SQL fixes: {e}")
             return sql_query
         
+        
     #########################################################################################
     # 2.2 Execute a vector search
     #########################################################################################
-        
+            
+    def perform_vector_search(self, query: str) -> Dict[str, Any]:
+        try:
+            # Get relevant documents
+            documents = self.retriever._get_relevant_documents(query, run_manager=None)
+            
+            # Extract content and metadata
+            sources = []
+            for doc in documents:
+                sources.append({
+                    "content": doc.page_content,
+                    "role": doc.metadata.get("role"),
+                    "user_id": doc.metadata.get("user_id"),
+                    "created_at": doc.metadata.get("created_at"),
+                    "similarity": doc.metadata.get("similarity")
+                })
+            
+            return {
+                "success": True,
+                "sources": sources,
+                "count": len(sources)
+            }
+            
+        except Exception as e:
+            log.error(f"Error in vector search: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "sources": []
+            }
+    
+
     #########################################################################################
     # Main pipeline
     #########################################################################################
@@ -498,7 +471,20 @@ class ChatAnalyticsService:
                 sql_data = pipeline_results["sql_results"]
                 sql_context = f"Database Query Results:\n"
                 sql_context += f"SQL: {sql_data.get('sql_query', 'N/A')}\n"
-                sql_context += f"Results: {json.dumps(sql_data.get('results', []), indent=2)}\n"
+                
+                # Convert datetime objects to strings before JSON serialization
+                results = sql_data.get('results', [])
+                serializable_results = []
+                for row in results:
+                    serializable_row = {}
+                    for key, value in row.items():
+                        if hasattr(value, 'isoformat'):  # datetime objects
+                            serializable_row[key] = value.isoformat()
+                        else:
+                            serializable_row[key] = value
+                    serializable_results.append(serializable_row)
+                
+                sql_context += f"Results: {json.dumps(serializable_results, indent=2)}\n"
                 context_parts.append(sql_context)
             
             # Add vector search results if available
@@ -510,28 +496,13 @@ class ChatAnalyticsService:
                         vector_context += f"{i}. {source.get('content', '')[:300]}...\n"
                     context_parts.append(vector_context)
             
-            # Generate final analysis
-            if context_parts:
-                # Use the answer LLM to synthesize all the data
-                synthesis_prompt = f"""
-You are an AI analyst. Based on the following data, provide a comprehensive answer to the user's question.
-
-User Question: {query}
-
-Available Data:
-{chr(10).join(context_parts)}
-
-Please provide a clear, comprehensive answer that synthesizes all the available information. 
-Be specific and reference the data when possible. If no relevant data was found, say so clearly.
-
-Answer:"""
-                
-                response = self.answer_llm.invoke(synthesis_prompt)
-                return response.content
-            else:
-                # No data retrieval tools were used or no data found
-                response = self.answer_llm.invoke(f"Answer this question: {query}")
-                return response.content
+            synthesis_prompt = FINAL_ANALYSIS_PROMPT.format(
+                question=query,
+                context_parts=chr(10).join(context_parts)
+            )
+            
+            response = self.answer_llm.invoke(synthesis_prompt)
+            return response.content
                 
         except Exception as e:
             log.error(f"Error generating final analysis: {e}")
