@@ -1,6 +1,7 @@
 import logging
 import json
 import sqlglot
+import time
 from typing import Dict, Any, Optional, List
 from enum import Enum
 from langchain.chains import RetrievalQA
@@ -405,33 +406,82 @@ class ChatAnalyticsService:
     #########################################################################################
 
     def analyze_chat_data(self, query: str) -> Dict[str, Any]:
+        start_time = time.time()
+        
         try:
             log.info(f"Analyzing chat data for query: '{query}'")
             
             # Step 1: Determine which tools are needed for this query
+            tool_selection_start = time.time()
             required_tools = self.determine_required_tools(query)
-            log.info(f"Required tools for query: {required_tools}")
+            tool_selection_time = time.time() - tool_selection_start
+            log.info(f"Required tools for query: {required_tools} (took {tool_selection_time:.3f}s)")
             
             # Step 2: Execute the pipeline with required tools
+            pipeline_start = time.time()
             pipeline_results = self._execute_pipeline(query, required_tools)
+            pipeline_time = time.time() - pipeline_start
+            log.info(f"Pipeline execution took {pipeline_time:.3f}s")
             
             # Step 3: Generate final analysis using all collected data
+            analysis_start = time.time()
             final_analysis = self._generate_final_analysis(query, pipeline_results)
+            analysis_time = time.time() - analysis_start
+            log.info(f"Final analysis generation took {analysis_time:.3f}s")
+            
+            # Step 4: Extract data for frontend consumption
+            sources = []
+            sql_results = None
+            message = None
+            
+            # Extract vector search sources - check for None first
+            vector_results = pipeline_results.get("vector_results")
+            if vector_results is not None and vector_results.get("success"):
+                sources = vector_results.get("sources", [])
+            
+            # Extract SQL results - check for None first
+            sql_results = pipeline_results.get("sql_results")
+            
+            # Check for any errors - check for None first
+            sql_success = sql_results is not None and sql_results.get("success") if sql_results else False
+            vector_success = vector_results is not None and vector_results.get("success") if vector_results else False
+            
+            if not sql_success and not vector_success:
+                message = "No relevant data was found for this query"
+            
+            total_time = time.time() - start_time
+            log.info(f"Total analysis completed in {total_time:.3f}s")
             
             return {
                 "success": True,
                 "analysis": final_analysis,
                 "query": query,
-                "tools_used": required_tools,
-                "pipeline_results": pipeline_results
+                "tool_used": required_tools, 
+                "sources": sources,
+                "sql_results": sql_results,
+                "message": message,
+                "timing": {
+                    "total_time": round(total_time, 3),
+                    "tool_selection": round(tool_selection_time, 3),
+                    "pipeline_execution": round(pipeline_time, 3),
+                    "analysis_generation": round(analysis_time, 3)
+                }
             }
             
         except Exception as e:
-            log.error(f"Error in chat analytics: {e}")
+            total_time = time.time() - start_time
+            log.error(f"Error in chat analytics after {total_time:.3f}s: {e}")
             return {
                 "success": False,
                 "message": f"Error analyzing chat data: {str(e)}",
-                "query": query
+                "query": query,
+                "tool_used": [], 
+                "sources": [],
+                "sql_results": None,
+                "timing": {
+                    "total_time": round(total_time, 3),
+                    "error_occurred_at": round(total_time, 3)
+                }
             }
 
     def _execute_pipeline(self, query: str, required_tools: List[str]) -> Dict[str, Any]:

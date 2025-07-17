@@ -19,7 +19,7 @@ class AnalyticsResponse(BaseModel):
     success: bool
     analysis: Optional[str] = None
     query: str
-    tool_used: Optional[str] = None
+    tool_used: Optional[List[str]] = []  # ← Changed from str to List[str]
     sources: list = []
     sql_results: Optional[dict] = None
     message: Optional[str] = None
@@ -30,8 +30,6 @@ async def analyze_chat_data(
     user=Depends(get_verified_user)
 ):
     try:
-        log.info(f"Received analytics request: {request.query}")
-        
         service = ChatAnalyticsService(model_id=request.model_id)
         result = service.analyze_chat_data(query=request.query)
         
