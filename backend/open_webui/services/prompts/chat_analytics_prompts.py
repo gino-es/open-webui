@@ -81,3 +81,24 @@ Guidelines:
 - Use clear, professional language suitable for business reporting
 
 Answer:""" 
+
+# Classification prompt for message intent/topic/sentiment
+CLASSIFICATION_PROMPT = """
+Analyze this message and classify it. Return ONLY a JSON object.
+
+Message: "{content}"
+Role: {role}
+Return this JSON format:
+{{
+  "intent": "describe what the person wants or is doing (clear and concise, only short words)",
+  "topic": "what subject or area this is about (clear and concise, only short words)",
+  "sentiment": -1.0 to 1.0
+}}
+
+Guidelines:
+- intent: What is the person trying to achieve? (e.g., "asking for help", "sharing information", "expressing frustration")
+- topic: What is this about? (e.g., "python programming", "relationship advice", "work stress")
+- sentiment: How positive/negative is the tone? (-1.0 = very negative, 0.0 = neutral, 1.0 = very positive)
+
+Be natural and descriptive. Return ONLY the JSON object, no explanations, no markdown, no extra text.
+"""

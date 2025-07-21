@@ -1192,6 +1192,15 @@ async def chat_completion(
         request.state.metadata = metadata
         form_data["metadata"] = metadata
 
+        # You can check if log_analytics is enabled here
+        features = form_data.get("features", {})
+        log_analytics_enabled = features.get("log_analytics", False)
+
+        if log_analytics_enabled:
+            log.info(f"Log analytics enabled for user {user.id}")
+        else:
+            log.info(f"Log analytics disabled for user {user.id}")
+
         form_data, metadata, events = await process_chat_payload(
             request, form_data, user, metadata, model
         )

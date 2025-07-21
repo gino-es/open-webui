@@ -122,6 +122,7 @@
 	let imageGenerationEnabled = false;
 	let webSearchEnabled = false;
 	let codeInterpreterEnabled = false;
+	let logAnalyticsEnabled = false;
 
 	let chat = null;
 	let tags = [];
@@ -148,6 +149,8 @@
 			selectedToolIds = [];
 			webSearchEnabled = false;
 			imageGenerationEnabled = false;
+			codeInterpreterEnabled = false;
+			logAnalyticsEnabled = false;
 
 			if (localStorage.getItem(`chat-input${chatIdProp ? `-${chatIdProp}` : ''}`)) {
 				try {
@@ -161,6 +164,7 @@
 					webSearchEnabled = input.webSearchEnabled;
 					imageGenerationEnabled = input.imageGenerationEnabled;
 					codeInterpreterEnabled = input.codeInterpreterEnabled;
+					logAnalyticsEnabled = input.logAnalyticsEnabled;
 				} catch (e) {}
 			}
 
@@ -430,6 +434,7 @@
 				webSearchEnabled = input.webSearchEnabled;
 				imageGenerationEnabled = input.imageGenerationEnabled;
 				codeInterpreterEnabled = input.codeInterpreterEnabled;
+				logAnalyticsEnabled = input.logAnalyticsEnabled;
 			} catch (e) {
 				prompt = '';
 				files = [];
@@ -437,6 +442,7 @@
 				webSearchEnabled = false;
 				imageGenerationEnabled = false;
 				codeInterpreterEnabled = false;
+				logAnalyticsEnabled = false;
 			}
 		}
 
@@ -1618,6 +1624,10 @@
 						$config?.features?.enable_web_search &&
 						($user?.role === 'admin' || $user?.permissions?.features?.web_search)
 							? webSearchEnabled || ($settings?.webSearch ?? false) === 'always'
+							: false,
+					log_analytics:
+						$user?.role === 'admin'
+							? logAnalyticsEnabled
 							: false
 				},
 				variables: {
@@ -2044,6 +2054,7 @@
 								bind:imageGenerationEnabled
 								bind:codeInterpreterEnabled
 								bind:webSearchEnabled
+								bind:logAnalyticsEnabled
 								bind:atSelectedModel
 								toolServers={$toolServers}
 								transparentBackground={$settings?.backgroundImageUrl ?? false}
@@ -2100,6 +2111,7 @@
 								bind:imageGenerationEnabled
 								bind:codeInterpreterEnabled
 								bind:webSearchEnabled
+								bind:logAnalyticsEnabled
 								bind:atSelectedModel
 								transparentBackground={$settings?.backgroundImageUrl ?? false}
 								toolServers={$toolServers}

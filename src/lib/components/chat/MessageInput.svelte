@@ -53,6 +53,7 @@
 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
 	import ToolServersModal from './ToolServersModal.svelte';
 	import Wrench from '../icons/Wrench.svelte';
+	import ChartBar from '../icons/ChartBar.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -83,6 +84,7 @@
 	export let imageGenerationEnabled = false;
 	export let webSearchEnabled = false;
 	export let codeInterpreterEnabled = false;
+	export let logAnalyticsEnabled = false;
 
 	$: onChange({
 		prompt,
@@ -90,7 +92,8 @@
 		selectedToolIds,
 		imageGenerationEnabled,
 		webSearchEnabled,
-		codeInterpreterEnabled
+		codeInterpreterEnabled,
+		logAnalyticsEnabled
 	});
 
 	let showTools = false;
@@ -773,6 +776,7 @@
 														selectedToolIds = [];
 														webSearchEnabled = false;
 														imageGenerationEnabled = false;
+														logAnalyticsEnabled = false;
 													}
 												}}
 												on:paste={async (e) => {
@@ -980,6 +984,7 @@
 													selectedToolIds = [];
 													webSearchEnabled = false;
 													imageGenerationEnabled = false;
+													logAnalyticsEnabled = false;
 												}
 											}}
 											rows="1"
@@ -1179,6 +1184,26 @@
 															<span
 																class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis translate-y-[0.5px]"
 																>{$i18n.t('Code Interpreter')}</span
+															>
+														</button>
+													</Tooltip>
+												{/if}
+
+												<!-- CUSTOM: Add a button to analyze user chat usage -->
+												{#if $_user.role === 'admin'}
+													<Tooltip content={$i18n.t('Analysis user chat logs')} placement="top">
+														<button
+															on:click|preventDefault={() =>
+																(logAnalyticsEnabled = !logAnalyticsEnabled)}
+															type="button"
+															class="px-1.5 @xl:px-2.5 py-1.5 flex gap-1.5 items-center text-sm rounded-full font-medium transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden border {logAnalyticsEnabled
+															? 'bg-gradient-to-r from-orange-50 to-orange-75 dark:from-orange-900/20 dark:to-orange-800/20 border-orange-200 dark:border-orange-500 text-orange-500 dark:text-orange-300'
+															: 'bg-transparent border-transparent text-gray-600 dark:text-gray-300  hover:bg-gray-100 dark:hover:bg-gray-800 '}"
+														>
+															<ChartBar className="size-5" strokeWidth="1.75" />
+															<span
+																class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis translate-y-[0.5px]"
+																>{$i18n.t('Chat Data Analysis')}</span
 															>
 														</button>
 													</Tooltip>

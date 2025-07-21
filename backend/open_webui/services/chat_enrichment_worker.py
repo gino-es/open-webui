@@ -12,6 +12,7 @@ from sqlalchemy import text
 from groq import Groq
 
 from open_webui.models.chat_message import ChatMessages
+from open_webui.services.prompts.chat_analytics_prompts import CLASSIFICATION_PROMPT
 
 log = logging.getLogger(__name__)
 
@@ -296,32 +297,50 @@ class ChatEnrichmentWorker:
         return overlapped
     
     def classify_message(self, content: str, role: str) -> Dict[str, Any]:
-        """Simple LLM classification"""
-        try:
-            llm_client = self.get_llm_client()
-            if not llm_client:
-                return {'intent': 'general', 'topic': 'general', 'sentiment': 0.0}
-            
-            prompt = f"""Analyze this message and return ONLY a JSON object:
-            Message: "{content}"
-            Role: {role}
-            Return: {{"intent": "short description", "topic": "subject", "sentiment": -1.0 to 1.0}}"""
-            
-            response = llm_client.chat.completions.create(
-                model=os.getenv("GROQ_MODEL_ID") or "llama3-8b-8192",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1, max_tokens=200
-            )
-            
-            result = json.loads(response.choices[0].message.content.strip())
-            return {
-                'intent': str(result.get('intent', 'general')).lower().strip(),
-                'topic': str(result.get('topic', 'general')).lower().strip(),
-                'sentiment': max(-1.0, min(1.0, float(result.get('sentiment', 0.0))))
-            }
-        except Exception as e:
-            log.error(f"Classification error: {e}")
-            return {'intent': 'general', 'topic': 'general', 'sentiment': 0.0}
+        """Simple LLM classification with Groq model fallback from env"""
+        prompt = CLASSIFICATION_PROMPT.format(content=content, role=role)
+
+        messages = [{"role": "user", "content": prompt}]
+        groq_models = os.getenv("GROQ_MODEL_IDS").split(",")
+
+        llm_client = self.get_llm_client()
+        for model in groq_models:
+            model = model.strip()
+            if not model:
+                continue
+            try:
+                log.debug(f"Trying Groq model '{model}' for content: {content[:100]}...")
+                response = llm_client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=0.1,
+                    max_tokens=200
+                )
+                response_text = response.choices[0].message.content.strip()
+                log.debug(f"Groq model '{model}' response: {response_text}")
+
+                # Remove markdown code blocks if present
+                if response_text.startswith('```json'):
+                    response_text = response_text[7:]
+                if response_text.endswith('```'):
+                    response_text = response_text[:-3]
+                response_text = response_text.strip()
+
+                if response_text:
+                    classification = json.loads(response_text)
+                    result = {
+                        'intent': str(classification.get('intent', 'general')).lower().strip(),
+                        'topic': str(classification.get('topic', 'general')).lower().strip(),
+                        'sentiment': max(-1.0, min(1.0, float(classification.get('sentiment', 0.0))))
+                    }
+                    log.info(f"Groq model '{model}' classification successful: {result}")
+                    return result
+            except Exception as e:
+                log.warning(f"Groq model '{model}' failed: {e}")
+
+        # If all models fail, return default
+        log.warning("All Groq models failed, using default classification")
+        return {'intent': 'general', 'topic': 'general', 'sentiment': 0.0}
     
     def process_messages(self):
         """Main processing function"""
