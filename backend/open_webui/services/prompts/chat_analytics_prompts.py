@@ -5,33 +5,47 @@ TOOL_SELECTION_PROMPT = """
 You are an intelligent router that analyzes a user's question and determines which tools are needed to provide a comprehensive answer.
 
 Available tools:
-1. SQL_QUERY - For questions about metrics, KPIs, counts, statistics, user activity, or any quantitative data analysis
-2. VECTOR_SEARCH - For questions about specific conversations, chat content, user interactions, or semantic search
+1. SQL_QUERY - For questions about metrics, KPIs, counts, statistics, user activity, or any quantitative data analysis.
+2. VECTOR_SEARCH - For questions about specific conversations, chat content, user interactions, or semantic search.
+
+You will also return a "prev_context" field, which is a list of indices (0-based, oldest to newest) of previous messages from the conversation context that are relevant for answering the current question. If the user is asking about or referring to a previous assistant response or result, include its index in prev_context. If not, leave prev_context as an empty list.
+The prev_context result will be used to determine which previous tool result to include as a context for the current question.
 
 Question: {question}
 
-Analyze the question and respond with ONLY a JSON object in this exact format:
-{{ "tools": ["TOOL1", "TOOL2", ...] }}
+Conversation context (oldest to newest):
+{conversation_context}
 
-Where tools is an array of required tools. Use:
-- ["SQL_QUERY"] - for questions about numbers, counts, metrics
-- ["VECTOR_SEARCH"] - for questions about content, conversations, what was said
-- ["SQL_QUERY", "VECTOR_SEARCH"] - for questions that need both data and content
-- [] - for general questions that don't need specific data or don't need any tools
+Respond with ONLY a JSON object in this exact format:
+{{ "tools": ["TOOL1", "TOOL2", ...], "prev_context": [indices] }}
+
+Guidelines:
+- Use "SQL_QUERY" for questions about numbers, counts, metrics, or statistics.
+- Use "VECTOR_SEARCH" for questions about content, conversations, or what was said.
+- Use both if the question needs both data and content.
+- Use prev_context to indicate which previous message(s) are relevant for follow-up questions, clarifications, or references to earlier results.
+- If prev_context is empty, the user is not referring to any previous message.
 
 Examples:
-- "How many users registered last month?" → ["SQL"]
-- "What did users say about the new feature?" → ["VECTOR"] 
-- "What are the most common topics discussed and how many messages are about each?" → ["SQL", "VECTOR"]
-- "Explain how machine learning works" → []
+- If the user asks "How many users registered last month?" respond: {{ "tools": ["SQL_QUERY"], "prev_context": [] }}
+- If the user asks "What did users say about the new feature?" respond: {{ "tools": ["VECTOR_SEARCH"], "prev_context": [] }}
+- If the user asks "Why did you say that?" right after an assistant response at index 4, respond: {{ "tools": [], "prev_context": [4] }}
+- If the user asks "What will this affect?" and the last assistant message is at index 5, respond: {{ "tools": [], "prev_context": [5] }}
+- If the user asks "Show me the actual conversations about this issue" and the relevant assistant message is at index 3, respond: {{ "tools": ["VECTOR_SEARCH"], "prev_context": [3] }}
+- If the user asks "What are the most common topics discussed and how many messages are about each?" respond: {{ "tools": ["SQL_QUERY", "VECTOR_SEARCH"], "prev_context": [] }}
+- If the user asks "Explain how machine learning works" respond: {{ "tools": [], "prev_context": [] }}
 
-Response:"""
+Response:
+"""
 
 # SQL generation prompt with better guidance
 SQL_GENERATION_PROMPT = PromptTemplate(
     input_variables=["question", "schema"],
     template="""
-You are a SQL expert. Given a question and database schema, write a SQL query to answer it.
+You are a SQL expert. Given a conversation context and database schema, write a SQL query to answer the user's latest request.
+
+Conversation context (oldest to newest):
+{conversation_context}
 
 IMPORTANT RULES:
 1. Only use tables and columns that exist in the schema
@@ -49,11 +63,10 @@ TIMESTAMP TEMPLATES (use these exact patterns):
 Database Schema:
 {schema}
 
-Question: {question}
+Write a SQL query that answers the user's latest request, considering the full conversation context. Use the timestamp templates above for any date operations.
 
-Write a SQL query that answers this question. Use the timestamp templates above for any date operations.
-
-SQL Query: """
+SQL Query:
+"""
 )
 
 # Final analysis prompt for synthesizing all data sources

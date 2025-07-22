@@ -17,58 +17,53 @@ from open_webui.services.prompts.chat_analytics_prompts import (
     TOOL_SELECTION_PROMPT,
     FINAL_ANALYSIS_PROMPT,
 )
+from open_webui.models.admin_query_log import AdminQueryLogs
 
 log = logging.getLogger(__name__)
     
 class ChatAnalyticsService:
     
-    def __init__(self, model_id: str):
+    def __init__(self):
         self.retriever = ChatAnalyticsRetriever()
         self.allowed_tables = ["user", "chat", "chat_message", "chat_message_chunk"]
         self.tool_types = ["SQL_QUERY", "VECTOR_SEARCH"]
 
         self.control_llm = ChatOpenAI(model="gpt-4.1", temperature=0)
-        self.answer_llm = ChatOpenAI(model=model_id, temperature=0.1)
+        # self.answer_llm = ChatOpenAI(model=model_id, temperature=0.1)
 
 
     #########################################################################################
     # 1. Determine appropriate tools for the query
     #########################################################################################
 
-    def determine_required_tools(self, query: str) -> List[str]:
-        """Determine which data retrieval tools are needed for this query using LLM"""
-        try:
-            structured_prompt = TOOL_SELECTION_PROMPT.format(question=query)
-            response = self.control_llm.invoke(structured_prompt)
-            content = response.content.strip()
-            result = json.loads(content)
-            tools = result.get("tools", [])
-            
-            # Validate tools - only SQL_QUERY and VECTOR_SEARCH are valid data retrieval tools
-            validated_tools = [tool for tool in tools if tool in self.tool_types]
-            
-            return validated_tools
-            
-        except json.JSONDecodeError as je:
-            log.error(f"Invalid JSON in tool selection: {je} | Raw response: {content}")
-            # Fallback to simple keyword-based detection
-            return self._fallback_tool_detection(query)
-        except Exception as e:
-            log.error(f"Error in tool selection: {e}")
-            return self._fallback_tool_detection(query)
+    def determine_required_tools(self, query: str, conversation_context: List[Dict[str, Any]]) -> Dict[str, Any]:
+        context_str = "\n".join(
+            f"{i}. {msg['role']}: {msg['content'][:100]}" for i, msg in enumerate(conversation_context)
+        )
+        structured_prompt = TOOL_SELECTION_PROMPT.format(
+            question=query,
+            conversation_context=context_str
+        )
+        response = self.control_llm.invoke(structured_prompt)
+        content = response.content.strip()
+        result = json.loads(content)
+        # Optionally validate tools
+        result["tools"] = [tool for tool in result.get("tools", []) if tool in self.tool_types]
+        result["prev_context"] = result.get("prev_context", [])
+        return result
     
     
     #########################################################################################
     # 2.1 Execute a SQL query
     #########################################################################################
 
-    def execute_sql_query(self, question: str) -> Dict[str, Any]:
+    def execute_sql_query(self, conversation_context: str) -> Dict[str, Any]:
         try:
             available_tables = self.get_available_tables()
             schema = self.get_database_schema(available_tables)
             sql_prompt = SQL_GENERATION_PROMPT.format(
                 schema=schema,
-                question=question
+                conversation_context=conversation_context
             )
             log.info(f"generate SQL prompt: {sql_prompt}")
             
@@ -405,29 +400,42 @@ class ChatAnalyticsService:
     # Main pipeline
     #########################################################################################
 
-    def analyze_chat_data(self, query: str) -> Dict[str, Any]:
+    def analyze_chat_data(self, conversation_context: List[Dict[str, Any]], chat_id: str) -> Dict[str, Any]:
         start_time = time.time()
         
         try:
-            log.info(f"Analyzing chat data for query: '{query}'")
+            # Extract the last user message as the query
+            query = ""
+            if conversation_context:
+                last_message = conversation_context[-1]
+                if last_message.get("role") == "user":
+                    query = last_message.get("content", "")
             
-            # Step 1: Determine which tools are needed for this query
+            log.info(f"Analyzing chat data for query: '{query}' from {len(conversation_context)} messages")
+
+            # Step 1: Determine which tools and prev_context are needed
             tool_selection_start = time.time()
-            required_tools = self.determine_required_tools(query)
+            tool_struct = self.determine_required_tools(query, conversation_context)
+            required_tools = tool_struct.get("tools", [])
+            prev_context_indices = tool_struct.get("prev_context", [])
             tool_selection_time = time.time() - tool_selection_start
-            log.info(f"Required tools for query: {required_tools} (took {tool_selection_time:.3f}s)")
-            
-            # Step 2: Execute the pipeline with required tools
+            log.info(f"Required tools: {required_tools}, prev_context: {prev_context_indices} (took {tool_selection_time:.3f}s)")
+
+            # Step 2: Optionally gather previous context messages [todo: After summary is done]
+            # prev_tool_results = self.get_prev_tool_results(prev_context_indices, conversation_context, chat_id)
+
+            # Step 3: Execute the pipeline with required tools
             pipeline_start = time.time()
-            pipeline_results = self._execute_pipeline(query, required_tools)
+            context_str = build_conversation_context(query, conversation_context, prev_context_indices)
+            pipeline_results = self._execute_pipeline(query=context_str, required_tools=required_tools)
             pipeline_time = time.time() - pipeline_start
             log.info(f"Pipeline execution took {pipeline_time:.3f}s")
             
-            # Step 3: Generate final analysis using all collected data
-            analysis_start = time.time()
-            final_analysis = self._generate_final_analysis(query, pipeline_results)
-            analysis_time = time.time() - analysis_start
-            log.info(f"Final analysis generation took {analysis_time:.3f}s")
+            # Step 3: Generate final analysis using all collected data // move to integration with main pipeline
+            # analysis_start = time.time()
+            # final_analysis = self._generate_final_analysis(query, pipeline_results)
+            # analysis_time = time.time() - analysis_start
+            # log.info(f"Final analysis generation took {analysis_time:.3f}s")
             
             # Step 4: Extract data for frontend consumption
             sources = []
@@ -454,17 +462,19 @@ class ChatAnalyticsService:
             
             return {
                 "success": True,
-                "analysis": final_analysis,
+                "enriched_context": {
+                    "sql_results": sql_results,
+                    "vector_results": vector_results,
+                },
+                # "prev_context": , todo: add prev_context
                 "query": query,
-                "tool_used": required_tools, 
+                "tool_used": required_tools,
                 "sources": sources,
-                "sql_results": sql_results,
                 "message": message,
                 "timing": {
                     "total_time": round(total_time, 3),
                     "tool_selection": round(tool_selection_time, 3),
                     "pipeline_execution": round(pipeline_time, 3),
-                    "analysis_generation": round(analysis_time, 3)
                 }
             }
             
@@ -474,7 +484,7 @@ class ChatAnalyticsService:
             return {
                 "success": False,
                 "message": f"Error analyzing chat data: {str(e)}",
-                "query": query,
+                "query": query if 'query' in locals() else "",
                 "tool_used": [], 
                 "sources": [],
                 "sql_results": None,
@@ -557,3 +567,37 @@ class ChatAnalyticsService:
         except Exception as e:
             log.error(f"Error generating final analysis: {e}")
             return f"Error generating analysis: {str(e)}" 
+
+    def get_prev_tool_results(self, prev_context_indices: list, conversation_context: list, chat_id: str) -> list:
+        results = []
+        for idx in prev_context_indices:
+            if 0 <= idx < len(conversation_context):
+                msg = conversation_context[idx]
+                # Try to get the assistant message id (or user message id if needed)
+                ai_msg_id = msg.get("id") or msg.get("ai_msg_id")
+                if ai_msg_id:
+                    log_entry = AdminQueryLogs.get_query_log_by_id(ai_msg_id)
+                    if log_entry:
+                        results.append(log_entry)
+                    else:
+                        # Optionally, try to fetch by chat_id and message content if id is missing
+                        # Or just append None to keep the order
+                        results.append(None)
+                else:
+                    results.append(None)
+            else:
+                results.append(None)
+        return results 
+
+def build_conversation_context(question: str, conversation_context: list, prev_context_indices: list) -> str:
+    if not prev_context_indices:
+        # No previous context, just use the question
+        return f"USER: {question}"
+    else:
+        # Build context string from previous messages and the current question
+        context_lines = [
+            f"{i}. {conversation_context[i]['role']}: {conversation_context[i]['content']}"
+            for i in prev_context_indices if 0 <= i < len(conversation_context)
+        ]
+        context_lines.append(f"USER: {question}")
+        return "\n".join(context_lines) 

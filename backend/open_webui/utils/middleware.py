@@ -5,6 +5,7 @@ import os
 import base64
 
 import asyncio
+from datetime import datetime
 from aiocache import cached
 from typing import Any, Optional
 import random
@@ -92,11 +93,39 @@ from open_webui.env import (
 from open_webui.constants import TASKS
 
 from open_webui.models.chat_message import save_chat_message_record, calculate_turn_number
+from open_webui.services.chat_analytics_service import ChatAnalyticsService
+from open_webui.services.prompts.chat_analytics_prompts import FINAL_ANALYSIS_PROMPT
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MAIN"])
 
+def get_current_system_prompt(messages):
+    """
+    Returns the content of the first system prompt in the messages list, or None if not found.
+    """
+    for msg in messages:
+        if msg.get("role") == "system":
+            return msg.get("content", "")
+    return None
+
+def set_or_replace_system_prompt(messages, new_prompt):
+    """
+    Removes all existing system prompts and inserts the new one at the start of the messages list.
+    Returns the updated messages list.
+    """
+    messages = [msg for msg in messages if msg.get("role") != "system"]
+    messages.insert(0, {"role": "system", "content": new_prompt})
+    return messages
+
+def convert_datetimes(obj):
+    if isinstance(obj, dict):
+        return {k: convert_datetimes(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_datetimes(i) for i in obj]
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    return obj
 
 async def chat_completion_tools_handler(
     request: Request, body: dict, extra_params: dict, user: UserModel, models, tools
@@ -576,6 +605,93 @@ async def chat_image_generation_handler(
 
     return form_data
 
+async def chat_log_analytics_handler(
+    request: Request, form_data: dict, extra_params: dict, user
+):
+    event_emitter = extra_params["__event_emitter__"]
+
+    await event_emitter(
+        {
+            "type": "status",
+            "data": {
+                "action": "log_analytics",
+                "description": "Analyzing chat data",
+                "done": False,
+            },
+        }
+    )
+
+    messages = form_data["messages"]
+
+    # Get last 3 turns of conversation (up to 6 messages: 3 user + 3 assistant)
+    conversation_context = []
+    max_messages = 6
+
+    for i in range(len(messages) - 1, -1, -1):
+        message = messages[i]
+        conversation_context.insert(0, message)
+        if len(conversation_context) >= max_messages:
+            break
+
+    log.debug(f"Conversation context for analytics: {len(conversation_context)} messages out of {len(messages)} total")
+
+    try:
+        analytics_service = ChatAnalyticsService()
+        chat_id = form_data.get("chat_id") or extra_params.get("__metadata__", {}).get("chat_id")
+        analytics_result = analytics_service.analyze_chat_data(conversation_context, chat_id)
+        log.info(f"Analytics result: {analytics_result}")
+
+        enriched_context = analytics_result.get("enriched_context", {})
+
+        context_parts = []
+        if enriched_context.get("sql_results"):
+            sql_results_clean = convert_datetimes(enriched_context['sql_results'])
+            context_parts.append(f"SQL Results:\n{json.dumps(sql_results_clean, indent=2)}")
+        if enriched_context.get("vector_results"):
+            vector_results_clean = convert_datetimes(enriched_context['vector_results'])
+            context_parts.append(f"Vector Search Results:\n{json.dumps(vector_results_clean, indent=2)}")
+        context_str = "\n\n".join(context_parts)
+
+        if context_str.strip():
+            form_data["messages"] = prepend_to_first_user_message_content(
+                f"<context>\n{context_str}\n</context>",
+                form_data["messages"]
+            )
+
+        # Only replace the system prompt if analytics instructions are not present
+        analytics_instructions = "Use any provided context (SQL results, vector search, etc.) to answer the user's question"
+        current_system_prompt = get_current_system_prompt(form_data["messages"])
+        if not current_system_prompt or analytics_instructions not in current_system_prompt:
+            SYSTEM_PROMPT = (
+                "You are an AI analyst. Use any provided context (SQL results, vector search, etc.) to answer the user's question, "
+                "explain your reasoning, and provide actionable insights. Always reference the context if available."
+            )
+            form_data["messages"] = set_or_replace_system_prompt(form_data["messages"], SYSTEM_PROMPT)
+
+        await event_emitter({
+            "type": "status",
+            "data": {
+                "action": "log_analytics",
+                "description": "Analytics data added",
+                "done": True,
+            },
+        })
+
+    except Exception as e:
+        log.exception(e)
+        await event_emitter(
+            {
+                "type": "status",
+                "data": {
+                    "action": "log_analytics",
+                    "description": "Analytics failed, continuing with original query",
+                    "done": True,
+                    "error": True,
+                },
+            }
+        )
+
+    return form_data
 
 async def chat_completion_files_handler(
     request: Request, body: dict, user: UserModel
@@ -739,7 +855,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             history = chat_data.chat.get("history", {})
             messages = history.get("messages", {})
             current_id = history.get("currentId")
-            
+
             # Get the parent of the current message (which should be the user message)
             if current_id and current_id in messages:
                 parent_id = messages[current_id].get("parentId")
@@ -748,7 +864,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     if parent_message.get("role") == "user":
                         # Calculate turn number
                         turn_number = calculate_turn_number(chat_data, parent_id)
-                        
+
                         # Save to new chat_message table
                         await save_chat_message_record(
                             chat_id=metadata["chat_id"],
@@ -843,6 +959,12 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     else DEFAULT_CODE_INTERPRETER_PROMPT
                 ),
                 form_data["messages"],
+            )
+
+        # Add your log analytics handler here
+        if "log_analytics" in features and features["log_analytics"]:
+            form_data = await chat_log_analytics_handler(
+                request, form_data, extra_params, user
             )
 
     tool_ids = form_data.pop("tool_ids", None)
