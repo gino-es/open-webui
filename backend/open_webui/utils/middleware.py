@@ -94,7 +94,7 @@ from open_webui.constants import TASKS
 
 from open_webui.models.chat_message import save_chat_message_record, calculate_turn_number
 from open_webui.services.chat_analytics_service import ChatAnalyticsService
-from open_webui.services.prompts.chat_analytics_prompts import FINAL_ANALYSIS_PROMPT
+from open_webui.models.admin_query_log import AdminQueryLogs, AdminQueryLogForm
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
@@ -692,8 +692,7 @@ async def chat_log_analytics_handler(
                     analytics_content += f"_... and {len(sql_results_clean['results']) - 5} more results_\n"
             else:
                 analytics_content += "**SQL Query Results:**\n_No results found._\n"
-        else:
-            analytics_content += "**SQL Query Results:**\n_Not executed or failed._\n"
+        # Remove the else clause - don't add anything if SQL wasn't executed
 
         # Vector Results
         if vector_results_clean is not None:
@@ -706,8 +705,7 @@ async def chat_log_analytics_handler(
                     analytics_content += f"_... and {len(vector_results_clean['sources']) - 5} more sources_\n"
             else:
                 analytics_content += "**Vector Search Results:**\n_No results found._\n"
-        else:
-            analytics_content += "**Vector Search Results:**\n_Not executed or failed._\n"
+        # Remove the else clause - don't add anything if Vector search wasn't executed
 
         reasoning_block = (
             '<details type="reasoning" done="true">\n'
@@ -924,15 +922,18 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         # Calculate turn number
                         turn_number = calculate_turn_number(chat_data, parent_id)
 
-                        # Save to new chat_message table
-                        await save_chat_message_record(
-                            chat_id=metadata["chat_id"],
-                            user_id=user.id,
-                            role="user",
-                            turn_number=turn_number,
-                            content=user_message,
-                            message_id=parent_id
-                        )
+                        # Check if analytics is enabled
+                        analytics_enabled = metadata.get("features", {}).get("log_analytics", False)
+                        
+                        if not analytics_enabled:
+                            await save_chat_message_record(
+                                chat_id=metadata["chat_id"],
+                                user_id=user.id,
+                                role="user",
+                                turn_number=turn_number,
+                                content=user_message,
+                                message_id=parent_id
+                            )
 
     if model_knowledge:
         await event_emitter(
@@ -1358,18 +1359,42 @@ async def process_chat_response(
                         },
                     )
 
-                    # Save to new chat_message table
-                    chat_data = Chats.get_chat_by_id(metadata["chat_id"])
-                    if chat_data:
-                        turn_number = calculate_turn_number(chat_data, metadata["message_id"])
-                        await save_chat_message_record(
+                    # Check if analytics is enabled
+                    analytics_enabled = metadata.get("features", {}).get("log_analytics", False)
+                    
+                    if analytics_enabled:
+                        # Save complete conversation turn to admin_query_log for analytics
+                        # Get the user message ID from the current message's parent
+                        chat_data = Chats.get_chat_by_id(metadata["chat_id"])
+                        user_msg_id = None
+                        if chat_data:
+                            history = chat_data.chat.get("history", {})
+                            messages = history.get("messages", {})
+                            current_message = messages.get(metadata["message_id"], {})
+                            user_msg_id = current_message.get("parentId")
+                        
+                        analytics_data = form_data.get("metadata", {})
+                        admin_log_form = AdminQueryLogForm( 
                             chat_id=metadata["chat_id"],
-                            user_id=user.id,
-                            role="assistant",
-                            turn_number=turn_number,
-                            content=content,
-                            message_id=metadata["message_id"]
+                            user_msg_id=user_msg_id,
+                            ai_msg_id=metadata["message_id"],
+                            sql_summary=analytics_data.get("sql_results"),
+                            vector_summary=analytics_data.get("vector_results"),
                         )
+                        AdminQueryLogs.insert_query_log(admin_log_form) 
+                    else:
+                        # Save to chat_message table for regular chat
+                        chat_data = Chats.get_chat_by_id(metadata["chat_id"])
+                        if chat_data:
+                            turn_number = calculate_turn_number(chat_data, metadata["message_id"])
+                            await save_chat_message_record(
+                                chat_id=metadata["chat_id"],
+                                user_id=user.id,
+                                role="assistant",
+                                turn_number=turn_number,
+                                content=content,
+                                message_id=metadata["message_id"]
+                            )
 
                     # Send a webhook notification if the user is not active
                     if not get_active_status_by_user_id(user.id):
@@ -2476,18 +2501,42 @@ async def process_chat_response(
                         },
                     )
 
-                    # Save to new chat_message table
-                    chat_data = Chats.get_chat_by_id(metadata["chat_id"])
-                    if chat_data:
-                        turn_number = calculate_turn_number(chat_data, metadata["message_id"])
-                        await save_chat_message_record(
+                    # Check if analytics is enabled
+                    analytics_enabled = metadata.get("features", {}).get("log_analytics", False)
+                    
+                    if analytics_enabled:
+                        # Save complete conversation turn to admin_query_log for analytics
+                        # Get the user message ID from the current message's parent
+                        chat_data = Chats.get_chat_by_id(metadata["chat_id"])
+                        user_msg_id = None
+                        if chat_data:
+                            history = chat_data.chat.get("history", {})
+                            messages = history.get("messages", {})
+                            current_message = messages.get(metadata["message_id"], {})
+                            user_msg_id = current_message.get("parentId")
+                        
+                        analytics_data = form_data.get("metadata", {})
+                        admin_log_form = AdminQueryLogForm(
                             chat_id=metadata["chat_id"],
-                            user_id=user.id,
-                            role="assistant",
-                            turn_number=turn_number,
-                            content=serialize_content_blocks(content_blocks),
-                            message_id=metadata["message_id"]
+                            user_msg_id=user_msg_id,
+                            ai_msg_id=metadata["message_id"],
+                            sql_summary=analytics_data.get("sql_results"),
+                            vector_summary=analytics_data.get("vector_results"),
                         )
+                        AdminQueryLogs.insert_query_log(admin_log_form)
+                    else:
+                        # Save to chat_message table for regular chat
+                        chat_data = Chats.get_chat_by_id(metadata["chat_id"])
+                        if chat_data:
+                            turn_number = calculate_turn_number(chat_data, metadata["message_id"])
+                            await save_chat_message_record(
+                                chat_id=metadata["chat_id"],
+                                user_id=user.id,
+                                role="assistant",
+                                turn_number=turn_number,
+                                content=serialize_content_blocks(content_blocks),
+                                message_id=metadata["message_id"]
+                            )
 
                 # Send a webhook notification if the user is not active
                 if not get_active_status_by_user_id(user.id):
@@ -2527,18 +2576,42 @@ async def process_chat_response(
                         },
                     )
 
-                    # Save to new chat_message table
-                    chat_data = Chats.get_chat_by_id(metadata["chat_id"])
-                    if chat_data:
-                        turn_number = calculate_turn_number(chat_data, metadata["message_id"])
-                        await save_chat_message_record(
+                    # Check if analytics is enabled
+                    analytics_enabled = metadata.get("features", {}).get("log_analytics", False)
+                    
+                    if analytics_enabled:
+                        # Save complete conversation turn to admin_query_log for analytics
+                        # Get the user message ID from the current message's parent
+                        chat_data = Chats.get_chat_by_id(metadata["chat_id"])
+                        user_msg_id = None
+                        if chat_data:
+                            history = chat_data.chat.get("history", {})
+                            messages = history.get("messages", {})
+                            current_message = messages.get(metadata["message_id"], {})
+                            user_msg_id = current_message.get("parentId")
+                        
+                        analytics_data = form_data.get("metadata", {})
+                        admin_log_form = AdminQueryLogForm( 
                             chat_id=metadata["chat_id"],
-                            user_id=user.id,
-                            role="assistant",
-                            turn_number=turn_number,
-                            content=serialize_content_blocks(content_blocks),
-                            message_id=metadata["message_id"]
+                            user_msg_id=user_msg_id,
+                            ai_msg_id=metadata["message_id"],
+                            sql_summary=analytics_data.get("sql_results"),
+                            vector_summary=analytics_data.get("vector_results"),
                         )
+                        AdminQueryLogs.insert_query_log(admin_log_form) 
+                    else:
+                        # Save to chat_message table for regular chat
+                        chat_data = Chats.get_chat_by_id(metadata["chat_id"])
+                        if chat_data:
+                            turn_number = calculate_turn_number(chat_data, metadata["message_id"])
+                            await save_chat_message_record(
+                                chat_id=metadata["chat_id"],
+                                user_id=user.id,
+                                role="assistant",
+                                turn_number=turn_number,
+                                content=serialize_content_blocks(content_blocks),
+                                message_id=metadata["message_id"]
+                            )
 
             if response.background is not None:
                 await response.background()
