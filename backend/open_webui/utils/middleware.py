@@ -681,10 +681,15 @@ async def chat_log_analytics_handler(
         else:
             analytics_content += "**Tools Used:**\n_No tools executed._\n\n"
 
+        
         # SQL Results
         if sql_results_clean is not None:
             if sql_results_clean.get("results"):
-                analytics_content += f"**SQL Query Results:**\n```json\n{json.dumps(sql_results_clean['results'], indent=2)}\n```\n"
+                # Limit to top 5 results
+                results = sql_results_clean['results'][:5]
+                analytics_content += f"**SQL Query Results:**\n```json\n{json.dumps(results, indent=2)}\n```\n"
+                if len(sql_results_clean['results']) > 5:
+                    analytics_content += f"_... and {len(sql_results_clean['results']) - 5} more results_\n"
             else:
                 analytics_content += "**SQL Query Results:**\n_No results found._\n"
         else:
@@ -693,7 +698,12 @@ async def chat_log_analytics_handler(
         # Vector Results
         if vector_results_clean is not None:
             if vector_results_clean.get("sources"):
-                analytics_content += f"**Vector Search Results:**\n```json\n{json.dumps(vector_results_clean['sources'], indent=2)}\n```\n"
+                sources = vector_results_clean['sources']
+                sources.sort(key=lambda x: x.get("similarity", 0), reverse=True)
+                sources = sources[:5]
+                analytics_content += f"**Vector Search Results:**\n```json\n{json.dumps(sources, indent=2)}\n```\n"
+                if len(vector_results_clean['sources']) > 5:
+                    analytics_content += f"_... and {len(vector_results_clean['sources']) - 5} more sources_\n"
             else:
                 analytics_content += "**Vector Search Results:**\n_No results found._\n"
         else:
