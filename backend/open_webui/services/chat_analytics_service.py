@@ -65,26 +65,18 @@ class ChatAnalyticsService:
                 schema=schema,
                 conversation_context=conversation_context
             )
-            log.info(f"generate SQL prompt: {sql_prompt}")
             
             sql_query = self.control_llm.invoke(sql_prompt).content.strip()
-            log.info(f"generate SQL query: {sql_query}")
-            
-            # Validate the SQL query
             validation = self.validate_sql_query(sql_query)
             log.info(f"validate SQL query: {validation}")
             
-            # Check if validation failed
             if not validation.get("valid", False):
                 log.error(f"SQL validation failed: {validation.get('error')}")
                 return {
                     "success": False,
-                    "error": f"SQL validation failed: {validation.get('error')}",
-                    "sql_query": sql_query,
-                    "validation": validation
+                    "error": f"SQL validation failed: {validation.get('error')}"
                 }
             
-            # Execute the validated query
             with get_db() as db:
                 result = db.execute(text(validation["parsed_query"]))
                 rows = result.fetchall()
@@ -92,7 +84,6 @@ class ChatAnalyticsService:
                 
                 log.info(f"SQL execution completed. Rows: {len(rows)}, Columns: {list(columns)}")
                 
-                # Convert to list of dicts
                 results = []
                 for row in rows:
                     row_dict = {}
@@ -100,22 +91,16 @@ class ChatAnalyticsService:
                         row_dict[col] = row[i]
                     results.append(row_dict)
                 
-                log.info(f"SQL results: {results}")
-                
                 return {
                     "success": True,
-                    "sql_query": validation["parsed_query"],
-                    "results": results,
-                    "row_count": len(results),
-                    "validation": validation
+                    "results": results
                 }
                 
         except Exception as e:
             log.error(f"Error executing SQL query: {e}")
             return {
                 "success": False,
-                "error": str(e),
-                "sql_query": sql_query if 'sql_query' in locals() else "Unknown"
+                "error": str(e)
             }
 
     def get_available_tables(self) -> List[str]:
@@ -187,8 +172,6 @@ class ChatAnalyticsService:
                 return {
                     "valid": False,
                     "error": f"SQL guardrail violation: {guardrail_checks['error']}",
-                    "guardrail_violation": True,
-                    "details": guardrail_checks,
                     "parsed_query": parsed
                 }
             
@@ -198,8 +181,6 @@ class ChatAnalyticsService:
             return {
                 "valid": True,
                 "error": None,
-                "guardrail_violation": False,
-                "details": guardrail_checks,
                 "parsed_query": parsed
             }
             
@@ -207,18 +188,12 @@ class ChatAnalyticsService:
             return {
                 "valid": False,
                 "error": f"SQL parsing error: {str(e)}",
-                "guardrail_violation": False,
-                "parse_error": True,
-                "details": {"parse_error": str(e)},
                 "parsed_query": None
             }
         except Exception as e:
             return {
                 "valid": False,
                 "error": f"Validation error: {str(e)}",
-                "guardrail_violation": False,
-                "parse_error": False,
-                "details": {"validation_error": str(e)},
                 "parsed_query": None
             }
     
@@ -318,7 +293,7 @@ class ChatAnalyticsService:
                     fixed_query = fixed_query.rstrip(';') + " LIMIT 1000;"
                 else:
                     fixed_query = fixed_query + " LIMIT 1000"
-                log.info(f"Added LIMIT clause: {fixed_query}")
+                # log.info(f"Added LIMIT clause: {fixed_query}")
             
             # Common timestamp column fixes for your schema
             timestamp_fixes = {
@@ -350,9 +325,6 @@ class ChatAnalyticsService:
             for old_table, new_table in table_fixes.items():
                 fixed_query = fixed_query.replace(f"FROM {old_table}", f"FROM {new_table}")
                 fixed_query = fixed_query.replace(f"JOIN {old_table}", f"JOIN {new_table}")
-            
-            if fixed_query != sql_query:
-                log.info(f"Fixed SQL query: {sql_query} -> {fixed_query}")
             
             return fixed_query
             

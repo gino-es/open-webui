@@ -633,30 +633,79 @@ async def chat_log_analytics_handler(
         if len(conversation_context) >= max_messages:
             break
 
-    log.debug(f"Conversation context for analytics: {len(conversation_context)} messages out of {len(messages)} total")
-
     try:
         analytics_service = ChatAnalyticsService()
         chat_id = form_data.get("chat_id") or extra_params.get("__metadata__", {}).get("chat_id")
         analytics_result = analytics_service.analyze_chat_data(conversation_context, chat_id)
-        log.info(f"Analytics result: {analytics_result}")
 
         enriched_context = analytics_result.get("enriched_context", {})
 
         context_parts = []
+        sql_results_clean = None
+        vector_results_clean = None
+
         if enriched_context.get("sql_results"):
             sql_results_clean = convert_datetimes(enriched_context['sql_results'])
             context_parts.append(f"SQL Results:\n{json.dumps(sql_results_clean, indent=2)}")
+        
         if enriched_context.get("vector_results"):
             vector_results_clean = convert_datetimes(enriched_context['vector_results'])
             context_parts.append(f"Vector Search Results:\n{json.dumps(vector_results_clean, indent=2)}")
+        
         context_str = "\n\n".join(context_parts)
-
         if context_str.strip():
             form_data["messages"] = prepend_to_first_user_message_content(
                 f"<context>\n{context_str}\n</context>",
                 form_data["messages"]
             )
+
+        analytics_content = ""
+
+        # Tools Used
+        tool_used = analytics_result.get("tool_used", {})
+        if tool_used:
+            tools_list = []
+            if isinstance(tool_used, dict):
+                if tool_used.get("tools"):
+                    tools_list.extend(tool_used["tools"])
+                if tool_used.get("prev_context"):
+                    tools_list.append(f"Previous Context (indices: {tool_used['prev_context']})")
+            elif isinstance(tool_used, list):
+                # If tool_used is directly a list
+                tools_list = tool_used
+            
+            if tools_list:
+                analytics_content += f"**Tools Used:**\n```json\n{json.dumps(tools_list, indent=2)}\n```\n\n"
+            else:
+                analytics_content += "**Tools Used:**\n_No tools executed._\n\n"
+        else:
+            analytics_content += "**Tools Used:**\n_No tools executed._\n\n"
+
+        # SQL Results
+        if sql_results_clean is not None:
+            if sql_results_clean.get("results"):
+                analytics_content += f"**SQL Query Results:**\n```json\n{json.dumps(sql_results_clean['results'], indent=2)}\n```\n"
+            else:
+                analytics_content += "**SQL Query Results:**\n_No results found._\n"
+        else:
+            analytics_content += "**SQL Query Results:**\n_Not executed or failed._\n"
+
+        # Vector Results
+        if vector_results_clean is not None:
+            if vector_results_clean.get("sources"):
+                analytics_content += f"**Vector Search Results:**\n```json\n{json.dumps(vector_results_clean['sources'], indent=2)}\n```\n"
+            else:
+                analytics_content += "**Vector Search Results:**\n_No results found._\n"
+        else:
+            analytics_content += "**Vector Search Results:**\n_Not executed or failed._\n"
+
+        reasoning_block = (
+            '<details type="reasoning" done="true">\n'
+            '<summary>Analytics Thought</summary>\n'
+            f'{analytics_content}\n'
+            '</details>\n'
+        )
+        form_data.setdefault("metadata", {})["analytics_reasoning_block"] = reasoning_block
 
         # Only replace the system prompt if analytics instructions are not present
         analytics_instructions = "Use any provided context (SQL results, vector search, etc.) to answer the user's question"
@@ -961,7 +1010,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 form_data["messages"],
             )
 
-        # Add your log analytics handler here
         if "log_analytics" in features and features["log_analytics"]:
             form_data = await chat_log_analytics_handler(
                 request, form_data, extra_params, user
@@ -974,8 +1022,11 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     if files:
         files = list({json.dumps(f, sort_keys=True): f for f in files}.values())
 
+    # Preserve any existing metadata (like analytics_reasoning_block)
+    existing_metadata = form_data.get("metadata", {})
     metadata = {
         **metadata,
+        **existing_metadata,  # <-- PRESERVE EXISTING METADATA
         "tool_ids": tool_ids,
         "files": files,
     }
@@ -1261,8 +1312,13 @@ async def process_chat_response(
             if choices and choices[0].get("message", {}).get("content"):
                 content = response["choices"][0]["message"]["content"]
 
-                if content:
+                # --- Inject analytics reasoning block early if present (NON-STREAMING) ---
+                analytics_reasoning = form_data.get("metadata", {}).get("analytics_reasoning_block")
+                if analytics_reasoning:
+                    content = f"{analytics_reasoning}\n\n{content}"
+                # --- End early injection ---
 
+                if content:
                     await event_emitter(
                         {
                             "type": "chat:completion",
@@ -1711,6 +1767,16 @@ async def process_chat_response(
                     "content": content,
                 }
             ]
+
+            # --- Inject analytics reasoning block early if present ---
+            analytics_reasoning = form_data.get("metadata", {}).get("analytics_reasoning_block")
+            if analytics_reasoning:
+                # Add analytics reasoning block as a separate content block
+                content_blocks.append({
+                    "type": "text",
+                    "content": analytics_reasoning,
+                })
+            # --- End early injection ---
 
             # We might want to disable this by default
             DETECT_REASONING = True
