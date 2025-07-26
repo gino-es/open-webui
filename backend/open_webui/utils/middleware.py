@@ -1,4 +1,3 @@
-import time
 import logging
 import sys
 import os
@@ -7,7 +6,7 @@ import base64
 import asyncio
 from datetime import datetime
 from aiocache import cached
-from typing import Any, Optional
+from typing import Any, Optional, List, Dict
 import random
 import json
 import html
@@ -622,22 +621,12 @@ async def chat_log_analytics_handler(
     )
 
     messages = form_data["messages"]
-
-    # Get last 3 turns of conversation (up to 6 messages: 3 user + 3 assistant)
-    conversation_context = []
-    max_messages = 6
-
-    for i in range(len(messages) - 1, -1, -1):
-        message = messages[i]
-        conversation_context.insert(0, message)
-        if len(conversation_context) >= max_messages:
-            break
+    max_recent_messages = 10
+    conversation_context = messages[-max_recent_messages:] if len(messages) > max_recent_messages else messages
 
     try:
         analytics_service = ChatAnalyticsService()
-        chat_id = form_data.get("chat_id") or extra_params.get("__metadata__", {}).get("chat_id")
-        analytics_result = analytics_service.analyze_chat_data(conversation_context, chat_id)
-
+        analytics_result = await analytics_service.analyze_chat_data(conversation_context)
         enriched_context = analytics_result.get("enriched_context", {})
 
         context_parts = []
@@ -661,6 +650,11 @@ async def chat_log_analytics_handler(
 
         analytics_content = ""
 
+        # Enhanced Query (add this first)
+        enhanced_query = analytics_result.get("enhanced_query", "")
+        if enhanced_query:
+            analytics_content += f"**Enhanced Query:**\n`{enhanced_query}`\n\n"
+
         # Tools Used
         tool_used = analytics_result.get("tool_used", {})
         if tool_used:
@@ -671,7 +665,6 @@ async def chat_log_analytics_handler(
                 if tool_used.get("prev_context"):
                     tools_list.append(f"Previous Context (indices: {tool_used['prev_context']})")
             elif isinstance(tool_used, list):
-                # If tool_used is directly a list
                 tools_list = tool_used
             
             if tools_list:
@@ -681,7 +674,6 @@ async def chat_log_analytics_handler(
         else:
             analytics_content += "**Tools Used:**\n_No tools executed._\n\n"
 
-        
         # SQL Results
         if sql_results_clean is not None:
             if sql_results_clean.get("results"):
@@ -692,7 +684,6 @@ async def chat_log_analytics_handler(
                     analytics_content += f"_... and {len(sql_results_clean['results']) - 5} more results_\n"
             else:
                 analytics_content += "**SQL Query Results:**\n_No results found._\n"
-        # Remove the else clause - don't add anything if SQL wasn't executed
 
         # Vector Results
         if vector_results_clean is not None:
@@ -705,7 +696,16 @@ async def chat_log_analytics_handler(
                     analytics_content += f"_... and {len(vector_results_clean['sources']) - 5} more sources_\n"
             else:
                 analytics_content += "**Vector Search Results:**\n_No results found._\n"
-        # Remove the else clause - don't add anything if Vector search wasn't executed
+
+        # Wrap everything in block quotes using the same pattern as other reasoning blocks
+        lines = analytics_content.split('\n')
+        quoted_lines = []
+        for line in lines:
+            if line.strip() and not line.startswith(">"):
+                quoted_lines.append(f"> {line}")
+            else:
+                quoted_lines.append(line)
+        analytics_content = '\n'.join(quoted_lines)
 
         reasoning_block = (
             '<details type="reasoning" done="true">\n'
@@ -2657,3 +2657,4 @@ async def process_chat_response(
             headers=dict(response.headers),
             background=response.background,
         )
+

@@ -115,3 +115,57 @@ Guidelines:
 
 Be natural and descriptive. Return ONLY the JSON object, no explanations, no markdown, no extra text.
 """
+
+ENHANCED_TOOL_SELECTION_PROMPT = """
+You are an intelligent router that analyzes a user's question and determines which tools are needed to provide a comprehensive answer.
+
+Available tools:
+1. SQL_QUERY - For questions about metrics, KPIs, counts, statistics, user activity, patterns, categories, classifications, distributions, trends, or any quantitative analysis.
+2. VECTOR_SEARCH - For questions about specific conversations, chat content, user interactions, or semantic search of actual message content.
+
+Respond with strict JSON: object in this exact format:
+{{
+  "enhanced_query": <string>,  (specific, actionable question based on context)
+  "tools": [<string>],  (list of tool names)  
+  "prev_context": [<int>],
+  "reasoning": <string>,  (brief explanation of enhancement and tool selection)
+}}
+
+Guidelines:
+- **SQL_QUERY**: Use for questions about numbers, counts, patterns, categories, types, distributions, statistics, metrics, trends, analysis
+- **VECTOR_SEARCH**: Use for questions about specific content, conversations, what was said, semantic search
+- **Enhanced Query**: Transform vague questions into specific, actionable queries that clearly indicate what data is needed
+
+Conversation excerpt:
+{conversation_context}
+
+Question: {question}
+
+Examples:
+- Example 1
+  User Q: "Show the trend of daily active users this month"
+  Return:
+  {{"enhanced_query":"What is the daily_active_users per day for the last 30 days?",
+  "tools":["SQL_QUERY"],
+  "prev_context":[],
+  "reasoning":"Needs numeric trend."}}
+
+- Example 2
+  User Q: "Give me 3 chats where users complained about refunds"
+  Return:
+  {{"enhanced_query":"Find 3 recent conversations containing refund complaints",
+  "tools":["VECTOR_SEARCH"],
+  "prev_context":[],
+  "reasoning":"Needs semantic search of message text."}}
+
+- Example 3
+  User Q: "What did Alice just ask?"
+  Conversation excerpt shows last user message idx 7.
+  Return:
+  {{"enhanced_query":"Return the content of message idx 7",
+  "tools":[],
+  "prev_context":[7],
+  "reasoning":"Answer is already in memory."}}
+
+Response:
+"""

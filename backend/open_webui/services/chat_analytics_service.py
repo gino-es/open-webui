@@ -14,7 +14,7 @@ from open_webui.retrieval.chat_analytics_retriever import ChatAnalyticsRetriever
 from open_webui.internal.db import get_db, engine
 from open_webui.services.prompts.chat_analytics_prompts import (
     SQL_GENERATION_PROMPT,
-    TOOL_SELECTION_PROMPT,
+    ENHANCED_TOOL_SELECTION_PROMPT,
     FINAL_ANALYSIS_PROMPT,
 )
 from open_webui.models.admin_query_log import AdminQueryLogs
@@ -36,20 +36,34 @@ class ChatAnalyticsService:
     # 1. Determine appropriate tools for the query
     #########################################################################################
 
-    def determine_required_tools(self, query: str, conversation_context: List[Dict[str, Any]]) -> Dict[str, Any]:
-        context_str = "\n".join(
-            f"{i}. {msg['role']}: {msg['content'][:100]}" for i, msg in enumerate(conversation_context)
-        )
-        structured_prompt = TOOL_SELECTION_PROMPT.format(
-            question=query,
-            conversation_context=context_str
-        )
+    async def determine_required_tools(self, query: str, conversation_context: List[Dict[str, Any]]) -> Dict[str, Any]:
+        # Convert conversation context to JSON string format
+        context_lines = []
+        for i, msg in enumerate(conversation_context):
+            context_obj = {
+                "idx": i,
+                "role": msg['role'],
+                "text": msg['content']
+            }
+            context_lines.append(json.dumps(context_obj)) 
+        
+        conversation_context_str = "[\n  " + ",\n  ".join(context_lines) + "\n]"
+        structured_prompt = ""
+
+        try:
+            structured_prompt = ENHANCED_TOOL_SELECTION_PROMPT.format(
+                question=query,
+                conversation_context=conversation_context_str
+            )
+        except Exception as e:
+            log.error(f"Error formatting prompt: {e}")
+            log.error(f"ENHANCED_TOOL_SELECTION_PROMPT: {ENHANCED_TOOL_SELECTION_PROMPT}")
+            raise
+
         response = self.control_llm.invoke(structured_prompt)
         content = response.content.strip()
         result = json.loads(content)
-        # Optionally validate tools
-        result["tools"] = [tool for tool in result.get("tools", []) if tool in self.tool_types]
-        result["prev_context"] = result.get("prev_context", [])
+        
         return result
     
     
@@ -372,34 +386,34 @@ class ChatAnalyticsService:
     # Main pipeline
     #########################################################################################
 
-    def analyze_chat_data(self, conversation_context: List[Dict[str, Any]], chat_id: str) -> Dict[str, Any]:
+    async def analyze_chat_data(self, conversation_context: List[Dict[str, Any]]) -> Dict[str, Any]:
         start_time = time.time()
-        
+
         try:
-            # Extract the last user message as the query
             query = ""
-            if conversation_context:
-                last_message = conversation_context[-1]
-                if last_message.get("role") == "user":
-                    query = last_message.get("content", "")
+            context_lines = []
+
+            last_message = conversation_context[-1]
+            if last_message.get("role") == "user":
+                query = last_message.get("content", "")
             
             log.info(f"Analyzing chat data for query: '{query}' from {len(conversation_context)} messages")
 
             # Step 1: Determine which tools and prev_context are needed
             tool_selection_start = time.time()
-            tool_struct = self.determine_required_tools(query, conversation_context)
+            tool_struct = await self.determine_required_tools(query, conversation_context)
             required_tools = tool_struct.get("tools", [])
-            prev_context_indices = tool_struct.get("prev_context", [])
+            enhanced_query = tool_struct.get("enhanced_query", query)
             tool_selection_time = time.time() - tool_selection_start
-            log.info(f"Required tools: {required_tools}, prev_context: {prev_context_indices} (took {tool_selection_time:.3f}s)")
 
             # Step 2: Optionally gather previous context messages [todo: After summary is done]
             # prev_tool_results = self.get_prev_tool_results(prev_context_indices, conversation_context, chat_id)
 
             # Step 3: Execute the pipeline with required tools
             pipeline_start = time.time()
-            context_str = build_conversation_context(query, conversation_context, prev_context_indices)
-            pipeline_results = self._execute_pipeline(query=context_str, required_tools=required_tools)
+            # context_str = build_conversation_context(conversation_context)
+            #context_str = conversation_context
+            pipeline_results = self._execute_pipeline(query=enhanced_query, required_tools=required_tools)
             pipeline_time = time.time() - pipeline_start
             log.info(f"Pipeline execution took {pipeline_time:.3f}s")
             
@@ -440,6 +454,7 @@ class ChatAnalyticsService:
                 },
                 # "prev_context": , todo: add prev_context
                 "query": query,
+                "enhanced_query": enhanced_query,
                 "tool_used": required_tools,
                 "sources": sources,
                 "message": message,
@@ -457,6 +472,7 @@ class ChatAnalyticsService:
                 "success": False,
                 "message": f"Error analyzing chat data: {str(e)}",
                 "query": query if 'query' in locals() else "",
+                "enhanced_query": enhanced_query if 'enhanced_query' in locals() else "",
                 "tool_used": [], 
                 "sources": [],
                 "sql_results": None,
@@ -561,15 +577,13 @@ class ChatAnalyticsService:
                 results.append(None)
         return results 
 
-def build_conversation_context(question: str, conversation_context: list, prev_context_indices: list) -> str:
-    if not prev_context_indices:
-        # No previous context, just use the question
-        return f"USER: {question}"
-    else:
-        # Build context string from previous messages and the current question
-        context_lines = [
-            f"{i}. {conversation_context[i]['role']}: {conversation_context[i]['content']}"
-            for i in prev_context_indices if 0 <= i < len(conversation_context)
-        ]
-        context_lines.append(f"USER: {question}")
-        return "\n".join(context_lines) 
+#def build_conversation_context(conversation_context: List[Dict[str, Any]]) -> str:
+#    """Build conversation context without truncation."""
+#    context_lines = []
+#    
+#    for i, msg in enumerate(conversation_context):
+#        # Don't truncate, or use a much higher limit
+#        content = msg['content'][:1000] if len(msg['content']) > 1000 else msg['content']
+#        context_lines.append(f"{i}. {msg['role']}: {content}")
+#    
+#    return "\n".join(context_lines) 
