@@ -138,3 +138,9 @@ opentelemetry-instrumentation-requests==0.53b1
 opentelemetry-instrumentation-logging==0.53b1
 opentelemetry-instrumentation-httpx==0.53b1
 opentelemetry-instrumentation-aiohttp-client==0.53b1
+
+## Custom
+groq==0.29.0
+sqlglot==27.0.0
+langchain-openai==0.3.27
+pyyaml==6.0.2

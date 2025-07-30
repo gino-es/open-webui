@@ -26,8 +26,8 @@ class ChatEnrichmentWorker:
         self.stop_event = threading.Event()
         
         # Processing config
-        self.batch_size = 50
-        self.sleep_interval = 300  # 5 minutes
+        self.batch_size = 10
+        self.sleep_interval = 60  # 1 minutes
         
         # Chunking config
         self.max_tokens = 512
@@ -414,9 +414,32 @@ class ChatEnrichmentWorker:
         except Exception as e:
             log.error(f"Error creating chunks for {message_id}: {e}")
     
+    def _wait_for_database(self):
+        """Simple wait loop until database is connected"""
+        log.info("Waiting for database connection...")
+        max_attempts = 30
+        delay = 2
+        
+        for attempt in range(max_attempts):
+            try:
+                with get_db() as db:
+                    db.execute(text("SELECT 1"))
+                    log.info("Database connection established")
+                    return
+            except Exception as e:
+                if attempt < max_attempts - 1:
+                    log.info(f"Database not ready (attempt {attempt + 1}/{max_attempts}), waiting {delay}s...")
+                    time.sleep(delay)
+                else:
+                    log.error(f"Database connection failed after {max_attempts} attempts")
+                    raise
+
     def worker_loop(self):
         """Main worker loop"""
         log.info("Chat enrichment worker started")
+        
+        # Wait for database to be ready
+        self._wait_for_database()
         
         while not self.stop_event.is_set():
             try:
