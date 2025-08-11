@@ -31,21 +31,66 @@ class ChatAnalyticsService:
         self.control_llm = ChatOpenAI(model="gpt-4.1", temperature=0)
         # self.answer_llm = ChatOpenAI(model=model_id, temperature=0.1)
 
+    def _truncate_conversation_context(self, conversation_context: List[Dict[str, Any]], max_chars_per_message: int = 500) -> List[Dict[str, Any]]:
+        """
+        Truncate conversation context to prevent token limit exceeded errors.
+        
+        Args:
+            conversation_context: List of message dictionaries
+            max_chars_per_message: Maximum characters to keep per message content
+            
+        Returns:
+            Truncated conversation context
+        """
+        truncated_context = []
+        total_original_chars = 0
+        total_truncated_chars = 0
+        
+        for i, msg in enumerate(conversation_context):
+            content = msg.get('content', '')
+            total_original_chars += len(content)
+            
+            # Truncate content if it's too long
+            if len(content) > max_chars_per_message:
+                # Try to truncate at a word boundary if possible
+                truncated_content = content[:max_chars_per_message]
+                if ' ' in truncated_content:
+                    last_space = truncated_content.rfind(' ')
+                    if last_space > max_chars_per_message * 0.8:  # Only if we don't lose too much
+                        truncated_content = truncated_content[:last_space]
+                truncated_content += "..."
+                log.info(f"Truncated message {i} from {len(content)} to {len(truncated_content)} characters")
+            else:
+                truncated_content = content
+            
+            total_truncated_chars += len(truncated_content)
+            
+            truncated_msg = {
+                "idx": i,
+                "role": msg.get('role', 'unknown'),
+                "text": truncated_content
+            }
+            truncated_context.append(truncated_msg)
+        
+        # Log truncation summary
+        if total_original_chars != total_truncated_chars:
+            reduction_percent = ((total_original_chars - total_truncated_chars) / total_original_chars) * 100
+            log.info(f"Conversation context truncated: {total_original_chars} -> {total_truncated_chars} chars ({reduction_percent:.1f}% reduction)")
+        
+        return truncated_context
 
     #########################################################################################
     # 1. Determine appropriate tools for the query
     #########################################################################################
 
     async def determine_required_tools(self, query: str, conversation_context: List[Dict[str, Any]]) -> Dict[str, Any]:
+        # Truncate conversation context to prevent token limit exceeded errors
+        truncated_context = self._truncate_conversation_context(conversation_context)
+        
         # Convert conversation context to JSON string format
         context_lines = []
-        for i, msg in enumerate(conversation_context):
-            context_obj = {
-                "idx": i,
-                "role": msg['role'],
-                "text": msg['content']
-            }
-            context_lines.append(json.dumps(context_obj)) 
+        for msg in truncated_context:
+            context_lines.append(json.dumps(msg)) 
         
         conversation_context_str = "[\n  " + ",\n  ".join(context_lines) + "\n]"
         structured_prompt = ""
@@ -55,16 +100,52 @@ class ChatAnalyticsService:
                 question=query,
                 conversation_context=conversation_context_str
             )
+            
+            # Estimate token count (rough approximation: 1 token ≈ 4 characters)
+            estimated_tokens = len(structured_prompt) // 4
+            log.info(f"Estimated prompt tokens: {estimated_tokens}")
+            
+            # If still too long, use more aggressive truncation
+            if estimated_tokens > 150000:  # Leave some buffer for response
+                log.warning(f"Prompt still too long ({estimated_tokens} tokens), using aggressive truncation")
+                truncated_context = self._truncate_conversation_context(conversation_context, max_chars_per_message=200)
+                
+                context_lines = []
+                for msg in truncated_context:
+                    context_lines.append(json.dumps(msg)) 
+                
+                conversation_context_str = "[\n  " + ",\n  ".join(context_lines) + "\n]"
+                structured_prompt = ENHANCED_TOOL_SELECTION_PROMPT.format(
+                    question=query,
+                    conversation_context=conversation_context_str
+                )
+                
+                estimated_tokens = len(structured_prompt) // 4
+                log.info(f"After aggressive truncation, estimated tokens: {estimated_tokens}")
+                
         except Exception as e:
             log.error(f"Error formatting prompt: {e}")
             log.error(f"ENHANCED_TOOL_SELECTION_PROMPT: {ENHANCED_TOOL_SELECTION_PROMPT}")
             raise
 
-        response = self.control_llm.invoke(structured_prompt)
-        content = response.content.strip()
-        result = json.loads(content)
-        
-        return result
+        try:
+            response = self.control_llm.invoke(structured_prompt)
+            content = response.content.strip()
+            result = json.loads(content)
+            
+            return result
+        except Exception as e:
+            if "maximum context length" in str(e) or "tokens" in str(e):
+                log.error(f"Token limit exceeded even after truncation: {e}")
+                # Fallback: return a simple response without context analysis
+                return {
+                    "enhanced_query": query,
+                    "tools": ["SQL_QUERY", "VECTOR_SEARCH"],  # Default to both tools
+                    "prev_context": [],
+                    "reasoning": "Fallback due to token limit exceeded"
+                }
+            else:
+                raise
     
     
     #########################################################################################

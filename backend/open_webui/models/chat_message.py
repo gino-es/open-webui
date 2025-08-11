@@ -25,13 +25,9 @@ class ChatMessage(Base):
     role = Column(Text, nullable=False)  # 'user' or 'assistant'
     turn_number = Column(Integer, nullable=False)
     content = Column(Text, nullable=False)
-    intent = Column(Text, nullable=True)
-    topic = Column(Text, nullable=True)
-    sentiment = Column(Float, nullable=True)
     message_id = Column(Text, nullable=True)
     created_at = Column(BigInteger, nullable=False)
     updated_at = Column(BigInteger, nullable=False)
-    embedding = Column(Text, nullable=True)
 
 
 class ChatMessageChunk(Base):
@@ -40,7 +36,6 @@ class ChatMessageChunk(Base):
     chunk_id = Column(Text, primary_key=True)
     msg_id = Column(Text, nullable=False)
     chunk_no = Column(SmallInteger, nullable=False)
-    embedding = Column(Text, nullable=True)
 
 
 class ChatMessageModel(BaseModel):
@@ -52,13 +47,9 @@ class ChatMessageModel(BaseModel):
     role: str
     turn_number: int
     content: str
-    intent: Optional[str] = None
-    topic: Optional[str] = None
-    sentiment: Optional[float] = None
     message_id: Optional[str] = None
     created_at: int
     updated_at: int
-    embedding: Optional[str] = None
 
 
 class ChatMessageChunkModel(BaseModel):
@@ -67,7 +58,6 @@ class ChatMessageChunkModel(BaseModel):
     chunk_id: str
     msg_id: str
     chunk_no: int
-    embedding: Optional[str] = None
 
 
 ####################
@@ -80,9 +70,6 @@ class ChatMessageForm(BaseModel):
     role: str
     turn_number: int
     content: str
-    intent: Optional[str] = None
-    topic: Optional[str] = None
-    sentiment: Optional[float] = None
     message_id: Optional[str] = None
 
 
