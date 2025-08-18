@@ -13,8 +13,7 @@ from sqlglot.errors import ParseError
 from open_webui.retrieval.chat_analytics_retriever import ChatAnalyticsRetriever
 from open_webui.internal.db import get_db, engine
 from open_webui.services.prompts.chat_analytics_prompts import (
-    SQL_GENERATION_PROMPT,
-    ENHANCED_TOOL_SELECTION_PROMPT,
+    ENHANCED_SQL_GENERATION_PROMPT,
     FINAL_ANALYSIS_PROMPT,
 )
 from open_webui.models.admin_query_log import AdminQueryLogs
@@ -25,7 +24,7 @@ class ChatAnalyticsService:
     
     def __init__(self):
         self.retriever = ChatAnalyticsRetriever()
-        self.allowed_tables = ["user", "chat", "chat_message", "chat_message_chunk"]
+        self.allowed_tables = ["user", "chat", "daily_report"]
         self.tool_types = ["SQL_QUERY", "VECTOR_SEARCH"]
 
         self.control_llm = ChatOpenAI(model="gpt-4.1", temperature=0)
@@ -83,69 +82,69 @@ class ChatAnalyticsService:
     # 1. Determine appropriate tools for the query
     #########################################################################################
 
-    async def determine_required_tools(self, query: str, conversation_context: List[Dict[str, Any]]) -> Dict[str, Any]:
-        # Truncate conversation context to prevent token limit exceeded errors
-        truncated_context = self._truncate_conversation_context(conversation_context)
-        
-        # Convert conversation context to JSON string format
-        context_lines = []
-        for msg in truncated_context:
-            context_lines.append(json.dumps(msg)) 
-        
-        conversation_context_str = "[\n  " + ",\n  ".join(context_lines) + "\n]"
-        structured_prompt = ""
-
-        try:
-            structured_prompt = ENHANCED_TOOL_SELECTION_PROMPT.format(
-                question=query,
-                conversation_context=conversation_context_str
-            )
-            
-            # Estimate token count (rough approximation: 1 token ≈ 4 characters)
-            estimated_tokens = len(structured_prompt) // 4
-            log.info(f"Estimated prompt tokens: {estimated_tokens}")
-            
-            # If still too long, use more aggressive truncation
-            if estimated_tokens > 150000:  # Leave some buffer for response
-                log.warning(f"Prompt still too long ({estimated_tokens} tokens), using aggressive truncation")
-                truncated_context = self._truncate_conversation_context(conversation_context, max_chars_per_message=200)
-                
-                context_lines = []
-                for msg in truncated_context:
-                    context_lines.append(json.dumps(msg)) 
-                
-                conversation_context_str = "[\n  " + ",\n  ".join(context_lines) + "\n]"
-                structured_prompt = ENHANCED_TOOL_SELECTION_PROMPT.format(
-                    question=query,
-                    conversation_context=conversation_context_str
-                )
-                
-                estimated_tokens = len(structured_prompt) // 4
-                log.info(f"After aggressive truncation, estimated tokens: {estimated_tokens}")
-                
-        except Exception as e:
-            log.error(f"Error formatting prompt: {e}")
-            log.error(f"ENHANCED_TOOL_SELECTION_PROMPT: {ENHANCED_TOOL_SELECTION_PROMPT}")
-            raise
-
-        try:
-            response = self.control_llm.invoke(structured_prompt)
-            content = response.content.strip()
-            result = json.loads(content)
-            
-            return result
-        except Exception as e:
-            if "maximum context length" in str(e) or "tokens" in str(e):
-                log.error(f"Token limit exceeded even after truncation: {e}")
-                # Fallback: return a simple response without context analysis
-                return {
-                    "enhanced_query": query,
-                    "tools": ["SQL_QUERY", "VECTOR_SEARCH"],  # Default to both tools
-                    "prev_context": [],
-                    "reasoning": "Fallback due to token limit exceeded"
-                }
-            else:
-                raise
+    #async def determine_required_tools(self, query: str, conversation_context: List[Dict[str, Any]]) -> Dict[str, Any]:
+    #    # Truncate conversation context to prevent token limit exceeded errors
+    #    truncated_context = self._truncate_conversation_context(conversation_context)
+    #    
+    #    # Convert conversation context to JSON string format
+    #    context_lines = []
+    #    for msg in truncated_context:
+    #        context_lines.append(json.dumps(msg)) 
+    #    
+    #    conversation_context_str = "[\n  " + ",\n  ".join(context_lines) + "\n]"
+    #    structured_prompt = ""
+#
+    #    try:
+    #        structured_prompt = ENHANCED_TOOL_SELECTION_PROMPT.format(
+    #            question=query,
+    #            conversation_context=conversation_context_str
+    #        )
+    #        
+    #        # Estimate token count (rough approximation: 1 token ≈ 4 characters)
+    #        estimated_tokens = len(structured_prompt) // 4
+    #        log.info(f"Estimated prompt tokens: {estimated_tokens}")
+    #        
+    #        # If still too long, use more aggressive truncation
+    #        if estimated_tokens > 150000:  # Leave some buffer for response
+    #            log.warning(f"Prompt still too long ({estimated_tokens} tokens), using aggressive truncation")
+    #            truncated_context = self._truncate_conversation_context(conversation_context, max_chars_per_message=200)
+    #            
+    #            context_lines = []
+    #            for msg in truncated_context:
+    #                context_lines.append(json.dumps(msg)) 
+    #            
+    #            conversation_context_str = "[\n  " + ",\n  ".join(context_lines) + "\n]"
+    #            structured_prompt = ENHANCED_TOOL_SELECTION_PROMPT.format(
+    #                question=query,
+    #                conversation_context=conversation_context_str
+    #            )
+    #            
+    #            estimated_tokens = len(structured_prompt) // 4
+    #            log.info(f"After aggressive truncation, estimated tokens: {estimated_tokens}")
+    #            
+    #    except Exception as e:
+    #        log.error(f"Error formatting prompt: {e}")
+    #        log.error(f"ENHANCED_TOOL_SELECTION_PROMPT: {ENHANCED_TOOL_SELECTION_PROMPT}")
+    #        raise
+#
+    #    try:
+    #        response = self.control_llm.invoke(structured_prompt)
+    #        content = response.content.strip()
+    #        result = json.loads(content)
+    #        
+    #        return result
+    #    except Exception as e:
+    #        if "maximum context length" in str(e) or "tokens" in str(e):
+    #            log.error(f"Token limit exceeded even after truncation: {e}")
+    #            # Fallback: return a simple response without context analysis
+    #            return {
+    #                "enhanced_query": query,
+    #                "tools": ["SQL_QUERY", "VECTOR_SEARCH"],  # Default to both tools
+    #                "prev_context": [],
+    #                "reasoning": "Fallback due to token limit exceeded"
+    #            }
+    #        else:
+    #            raise
     
     
     #########################################################################################
@@ -156,20 +155,54 @@ class ChatAnalyticsService:
         try:
             available_tables = self.get_available_tables()
             schema = self.get_database_schema(available_tables)
-            sql_prompt = SQL_GENERATION_PROMPT.format(
+            sql_prompt = ENHANCED_SQL_GENERATION_PROMPT.format(
                 schema=schema,
                 conversation_context=conversation_context
             )
             
-            sql_query = self.control_llm.invoke(sql_prompt).content.strip()
+            # Get LLM response
+            llm_response = self.control_llm.invoke(sql_prompt).content.strip()
+            log.info(f"LLM response: {llm_response}")
+            
+            # Parse JSON response to extract all fields
+            try:
+                parsed_response = json.loads(llm_response)
+                sql_query = parsed_response.get("sql_query", "")
+                enhanced_query = parsed_response.get("enhanced_query", "")
+                reasoning = parsed_response.get("reasoning", "")
+                
+                if not sql_query:
+                    log.error("No SQL query found in LLM response")
+                    return {
+                        "success": False,
+                        "error": "No SQL query generated by LLM",
+                        "llm_response": parsed_response  # Include the full response for debugging
+                    }
+                
+                log.info(f"Enhanced query: {enhanced_query}")
+                log.info(f"Reasoning: {reasoning}")
+                log.info(f"Generated SQL: {sql_query}")
+                
+            except json.JSONDecodeError as e:
+                log.error(f"Failed to parse LLM response as JSON: {e}")
+                log.error(f"Raw response: {llm_response}")
+                return {
+                    "success": False,
+                    "error": f"Invalid JSON response from LLM: {str(e)}",
+                    "raw_response": llm_response
+                }
+            
+            # Validate and execute SQL
             validation = self.validate_sql_query(sql_query)
-            log.info(f"validate SQL query: {validation}")
+            log.info(f"SQL validation: {validation}")
             
             if not validation.get("valid", False):
                 log.error(f"SQL validation failed: {validation.get('error')}")
                 return {
                     "success": False,
-                    "error": f"SQL validation failed: {validation.get('error')}"
+                    "error": f"SQL validation failed: {validation.get('error')}",
+                    "llm_response": parsed_response,  # Include the full LLM response
+                    "sql_query": sql_query
                 }
             
             with get_db() as db:
@@ -188,7 +221,12 @@ class ChatAnalyticsService:
                 
                 return {
                     "success": True,
-                    "results": results
+                    "results": results,
+                    "llm_response": parsed_response,  # Full LLM response with enhanced_query, reasoning, sql_query
+                    "sql_query": sql_query,  # The actual SQL that was executed
+                    "enhanced_query": enhanced_query,
+                    "reasoning": reasoning,
+                    "validation": validation  # Include validation info for debugging
                 }
                 
         except Exception as e:
@@ -480,48 +518,39 @@ class ChatAnalyticsService:
             
             log.info(f"Analyzing chat data for query: '{query}' from {len(conversation_context)} messages")
 
-            # Step 1: Determine which tools and prev_context are needed
-            tool_selection_start = time.time()
-            tool_struct = await self.determine_required_tools(query, conversation_context)
-            required_tools = tool_struct.get("tools", [])
-            enhanced_query = tool_struct.get("enhanced_query", query)
-            tool_selection_time = time.time() - tool_selection_start
+            # Step 1: Prepare conversation context for SQL generation
+            context_prep_start = time.time()
+            truncated_context = self._truncate_conversation_context(conversation_context)
+            
+            # Convert conversation context to a simple string format for SQL generation
+            context_lines = []
+            for i, msg in enumerate(truncated_context):
+                role = msg.get('role', 'unknown')
+                content = msg.get('text', '')[:200]  # Limit content length
+                context_lines.append(f"{i}. {role}: {content}")
+            
+            conversation_context_str = "\n".join(context_lines)
+            context_prep_time = time.time() - context_prep_start
 
-            # Step 2: Optionally gather previous context messages [todo: After summary is done]
-            # prev_tool_results = self.get_prev_tool_results(prev_context_indices, conversation_context, chat_id)
-
-            # Step 3: Execute the pipeline with required tools
+            # Step 2: Execute SQL query directly
             pipeline_start = time.time()
-            # context_str = build_conversation_context(conversation_context)
-            #context_str = conversation_context
-            pipeline_results = self._execute_pipeline(query=enhanced_query, required_tools=required_tools)
+            sql_results = self.execute_sql_query(conversation_context_str)
             pipeline_time = time.time() - pipeline_start
-            log.info(f"Pipeline execution took {pipeline_time:.3f}s")
+            log.info(f"SQL pipeline execution took {pipeline_time:.3f}s")
             
-            # Step 3: Generate final analysis using all collected data // move to integration with main pipeline
-            # analysis_start = time.time()
-            # final_analysis = self._generate_final_analysis(query, pipeline_results)
-            # analysis_time = time.time() - analysis_start
-            # log.info(f"Final analysis generation took {analysis_time:.3f}s")
-            
-            # Step 4: Extract data for frontend consumption
+            # Step 3: Extract data for frontend consumption
             sources = []
-            sql_results = None
             message = None
             
-            # Extract vector search sources - check for None first
-            vector_results = pipeline_results.get("vector_results")
-            if vector_results is not None and vector_results.get("success"):
-                sources = vector_results.get("sources", [])
-            
-            # Extract SQL results - check for None first
-            sql_results = pipeline_results.get("sql_results")
-            
-            # Check for any errors - check for None first
+            # Check for SQL success
             sql_success = sql_results is not None and sql_results.get("success") if sql_results else False
-            vector_success = vector_results is not None and vector_results.get("success") if vector_results else False
             
-            if not sql_success and not vector_success:
+            # Extract enhanced query from SQL results
+            enhanced_query = query  # Default to original query
+            if sql_success and sql_results.get("llm_response"):
+                enhanced_query = sql_results["llm_response"].get("enhanced_query", query)
+            
+            if not sql_success:
                 message = "No relevant data was found for this query"
             
             total_time = time.time() - start_time
@@ -531,17 +560,16 @@ class ChatAnalyticsService:
                 "success": True,
                 "enriched_context": {
                     "sql_results": sql_results,
-                    "vector_results": vector_results,
+                    "vector_results": None,  # Always None in SQL-only mode
                 },
-                # "prev_context": , todo: add prev_context
                 "query": query,
                 "enhanced_query": enhanced_query,
-                "tool_used": required_tools,
+                "tool_used": ["SQL_QUERY"],  # Always SQL only
                 "sources": sources,
                 "message": message,
                 "timing": {
                     "total_time": round(total_time, 3),
-                    "tool_selection": round(tool_selection_time, 3),
+                    "context_preparation": round(context_prep_time, 3),
                     "pipeline_execution": round(pipeline_time, 3),
                 }
             }
@@ -553,8 +581,8 @@ class ChatAnalyticsService:
                 "success": False,
                 "message": f"Error analyzing chat data: {str(e)}",
                 "query": query if 'query' in locals() else "",
-                "enhanced_query": enhanced_query if 'enhanced_query' in locals() else "",
-                "tool_used": [], 
+                "enhanced_query": enhanced_query if 'enhanced_query' in locals() else query if 'query' in locals() else "",
+                "tool_used": ["SQL_QUERY"], 
                 "sources": [],
                 "sql_results": None,
                 "timing": {

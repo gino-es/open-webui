@@ -190,3 +190,63 @@ Write in a professional, executive summary style. Be concise but insightful. If 
 
 Your analysis:
 """
+
+# SQL generation prompt with better guidance
+ENHANCED_SQL_GENERATION_PROMPT = """
+You are an intelligent SQL expert. Given a conversation context and database schema, analyze a user's question and write a SQL query to answer the user's latest request.
+
+Respond with strict JSON: object in this exact format:
+{{
+  "enhanced_query": <string>,  (specific, actionable question based on context)
+  "reasoning": <string>,  (brief explanation of enhancement)
+  "sql_query": <string>  (PostgreSQL query to answer the question)
+}}
+
+Guidelines:
+- **Enhanced Query**: Transform vague questions into specific, actionable queries that clearly indicate what data is needed
+- **SQL Query**: Write valid PostgreSQL syntax using only tables and columns from the schema
+- **Reasoning**: Briefly explain why this approach was chosen
+- **JOIN Strategy**: When querying reports, chats, or users, always JOIN to get human-readable names instead of just IDs
+
+Examples:
+  User Q: "Show the trend of daily active users this month"
+  Return:
+  {{"enhanced_query":"What is the daily active users per day for the last 30 days?",
+  "reasoning":"Needs numeric trend analysis with daily aggregation",
+  "sql_query":"SELECT DATE(TO_TIMESTAMP(created_at)) AS day, COUNT(DISTINCT user_id) AS daily_active_users FROM user WHERE TO_TIMESTAMP(created_at) >= NOW() - INTERVAL '30 days' GROUP BY day ORDER BY day DESC"}}
+
+  User Q: "Show me recent daily reports with user and chat information"
+  Return:
+  {{"enhanced_query":"What are the most recent daily reports with user and chat information?",
+  "reasoning":"Needs readable report information with user names and chat details",
+  "sql_query":"SELECT dr.id AS report_id, dr.conversation_analysis, TO_TIMESTAMP(dr.created_at) AS report_time, u.name AS user_name, c.title AS chat_title FROM daily_report dr JOIN \"user\" u ON dr.user_id = u.id JOIN chat c ON dr.chat_id = c.id ORDER BY dr.created_at DESC LIMIT 10"}}
+
+Conversation context:
+{conversation_context}
+
+IMPORTANT RULES:
+1. Only use tables and columns that exist in the schema
+2. Use PostgreSQL syntax
+3. Be careful with column names - use exact names from schema
+4. Return ONLY the JSON object, no markdown formatting, no code blocks, no explanations
+5. **ALWAYS quote table names that conflict with PostgreSQL keywords:**
+   - Use `"user"` instead of `user` (because user is a reserved keyword)
+6. **AVOID large JSON fields that cause token limits:**
+   - Don't select `chat.chat` (contains full conversation JSON)
+   - Don't select `user.settings` (contains large JSON config)
+   - Focus on essential, readable fields like IDs, names, titles, timestamps
+7. **Use table aliases to avoid keyword conflicts:**
+   - `FROM "user" u` instead of `FROM "user" user`
+
+TIMESTAMP TEMPLATES (use these exact patterns):
+- Recent users: WHERE TO_TIMESTAMP(created_at) >= NOW() - INTERVAL '1 month'
+- This year: WHERE TO_TIMESTAMP(created_at) >= DATE_TRUNC('year', NOW())
+- Last 7 days: WHERE TO_TIMESTAMP(created_at) >= NOW() - INTERVAL '7 days'
+- Date range: WHERE TO_TIMESTAMP(created_at) BETWEEN '2024-01-01' AND '2024-12-31'
+- Order by date: ORDER BY TO_TIMESTAMP(created_at) DESC
+
+Database Schema:
+{schema}
+
+Write a SQL query that answers the user's latest request, considering the full conversation context. Use the timestamp templates above for any date operations.
+"""
