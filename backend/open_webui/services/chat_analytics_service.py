@@ -9,6 +9,7 @@ from langchain_openai import ChatOpenAI
 from sqlalchemy import text, inspect
 from sqlglot import parse_one, exp
 from sqlglot.errors import ParseError
+from datetime import date, datetime
 
 from open_webui.retrieval.chat_analytics_retriever import ChatAnalyticsRetriever
 from open_webui.internal.db import get_db, engine
@@ -210,10 +211,22 @@ class ChatAnalyticsService:
                 rows = result.fetchall()
                 columns = result.keys()
                 
-                log.info(f"SQL execution completed. Rows: {len(rows)}, Columns: {list(columns)}")
-                
-                results = []
+                # ✅ FIX: Convert date objects to strings for JSON serialization
+                serializable_rows = []
                 for row in rows:
+                    serializable_row = []
+                    for value in row:
+                        if isinstance(value, (date, datetime)):
+                            serializable_row.append(value.isoformat())
+                        else:
+                            serializable_row.append(value)
+                    serializable_rows.append(serializable_row)
+                
+                log.info(f"SQL execution completed. Rows: {len(serializable_rows)}, Columns: {list(columns)}")
+                
+                # ✅ FIX: Convert back to dictionary format for compatibility
+                results = []
+                for row in serializable_rows:
                     row_dict = {}
                     for i, col in enumerate(columns):
                         row_dict[col] = row[i]
@@ -221,12 +234,10 @@ class ChatAnalyticsService:
                 
                 return {
                     "success": True,
-                    "results": results,
-                    "llm_response": parsed_response,  # Full LLM response with enhanced_query, reasoning, sql_query
-                    "sql_query": sql_query,  # The actual SQL that was executed
-                    "enhanced_query": enhanced_query,
-                    "reasoning": reasoning,
-                    "validation": validation  # Include validation info for debugging
+                    "enhanced_query": parsed_response.get("enhanced_query", ""),
+                    "reasoning": parsed_response.get("reasoning", ""),
+                    "sql_query": validation["parsed_query"],
+                    "results": results  # Use dictionary format
                 }
                 
         except Exception as e:

@@ -729,24 +729,22 @@ async def chat_log_analytics_handler(
             "type": "status",
             "data": {
                 "action": "log_analytics",
-                "description": "Analytics data added",
-                "done": True,
+                "description": "Analytics completed, generating AI response...",
+                "done": False,  
             },
         })
 
     except Exception as e:
         log.exception(e)
-        await event_emitter(
-            {
-                "type": "status",
-                "data": {
-                    "action": "log_analytics",
-                    "description": "Analytics failed, continuing with original query",
-                    "done": True,
-                    "error": True,
-                },
-            }
-        )
+        await event_emitter({
+            "type": "status",
+            "data": {
+                "action": "log_analytics",
+                "description": "Analytics failed, continuing with original query",
+                "done": False, 
+                "error": True,
+            },
+        })
 
     return form_data
 
