@@ -16,6 +16,7 @@
 	import AccessControl from '../common/AccessControl.svelte';
 	import { stringify } from 'postcss';
 	import { toast } from 'svelte-sonner';
+	import ResponsesConfig from '$lib/components/workspace/Models/ResponsesConfig.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -88,6 +89,17 @@
 
 	let accessControl = {};
 
+	let responsesConfig = {
+		enabled: false,
+		reasoning: {
+			enabled: false,
+			effort: 'medium',
+			summary: 'auto'
+		},
+		background: false,
+		stream: false
+	};
+
 	const addUsage = (base_model_id) => {
 		const baseModel = $models.find((m) => m.id === base_model_id);
 
@@ -117,6 +129,7 @@
 
 		info.access_control = accessControl;
 		info.meta.capabilities = capabilities;
+		info.meta.responsesConfig = responsesConfig;
 
 		if (enableDescription) {
 			info.meta.description = info.meta.description.trim() === '' ? null : info.meta.description;
@@ -243,6 +256,14 @@
 
 			console.log(model?.access_control);
 			console.log(accessControl);
+
+			responsesConfig = { 
+				enabled: false,
+				reasoning: { enabled: false, effort: 'medium', summary: 'auto' },
+				background: false,
+				stream: false,
+				...(model?.meta?.responsesConfig ?? {})
+			};
 
 			info = {
 				...info,
@@ -719,6 +740,10 @@
 
 					<div class="my-2">
 						<Capabilities bind:capabilities />
+					</div>
+
+					<div class="my-2">
+						<ResponsesConfig bind:responsesConfig />
 					</div>
 
 					<div class="my-2 text-gray-300 dark:text-gray-700">

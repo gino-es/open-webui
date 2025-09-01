@@ -601,7 +601,6 @@ async def generate_chat_completion(
         bypass_filter = True
 
     idx = 0
-
     payload = {**form_data}
     metadata = payload.pop("metadata", None)
 
@@ -686,8 +685,22 @@ async def generate_chat_completion(
 
     # Transform payload for responses endpoint
     if endpoint == "responses":
-        #print(f"Transforming for responses endpoint")
-        #print(f"Original payload: {payload}")
+        # Get responses configuration from metadata.model.info.meta
+        responses_config = {}
+        if metadata and "model" in metadata:
+            model_meta = metadata["model"].get("info", {}).get("meta", {})
+            responses_config = model_meta.get("responsesConfig", {})
+        
+        # Extract configuration values with defaults
+        config_enabled = responses_config.get("enabled", False)
+        reasoning_config = responses_config.get("reasoning", {})
+        reasoning_enabled = reasoning_config.get("enabled", False)
+        reasoning_effort = reasoning_config.get("effort", "medium")
+        reasoning_summary = reasoning_config.get("summary", "auto")
+        background_enabled = responses_config.get("background", False)
+        stream_enabled = responses_config.get("stream", False)
+        
+        # print(f"[DEBUG] Responses config: enabled={config_enabled}, reasoning={reasoning_enabled}, background={background_enabled}, stream={stream_enabled}")
         
         # Transform messages to the format expected by /responses
         messages = payload["messages"]
@@ -725,7 +738,7 @@ async def generate_chat_completion(
                     ]
                 })
 
-        # Create new payload with the correct format
+        # Create new payload with model-specific settings
         new_payload = {
             "model": payload["model"],
             "input": transformed_messages,
@@ -734,23 +747,21 @@ async def generate_chat_completion(
                     "type": "text"
                 }
             },
-            "reasoning": {
-                "effort": "medium",
-                "summary": "auto"
-            },
             "tools": [],
             "store": True,
-            "background": True,
+            "background": background_enabled,
+            "stream": stream_enabled
         }
         
-        # Add optional parameters if they exist
-        if payload.get("temperature"):
-            new_payload["temperature"] = payload["temperature"]
-        if payload.get("top_p"):
-            new_payload["top_p"] = payload["top_p"]
-        if payload.get("max_tokens"):
-            new_payload["max_output_tokens"] = payload["max_tokens"]
-            
+        # Add reasoning configuration if enabled
+        if reasoning_enabled:
+            new_payload["reasoning"] = {
+                "effort": reasoning_effort if reasoning_effort else "medium",
+                "summary": reasoning_summary if reasoning_summary else "auto"
+            }
+        
+        print(f"[DEBUG] /responses payload: {new_payload}")
+        
         # Remove None values
         new_payload = {k: v for k, v in new_payload.items() if v is not None}
         
