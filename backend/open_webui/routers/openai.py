@@ -675,10 +675,13 @@ async def generate_chat_completion(
     is_o_series = payload["model"].lower().startswith(("o1", "o3", "o4"))
     if is_o_series:
         payload = openai_o_series_handler(payload)
-        #print(f"After o-series handler: {payload}")
 
-    # CUSTOM: reroute to /responses endpoint for o3-pro only
-    endpoint = "responses" if (payload["model"] == "o3-pro") else "chat/completions"
+    # CUSTOM: reroute to /responses endpoint for specific models only
+    if payload["model"] == "o3-pro" or payload["model"] == "gpt-5":
+        endpoint = "responses"
+    else:
+        endpoint = "chat/completions"
+
     print(f"OpenAI Endpoint: {endpoint}")
 
     # Transform payload for responses endpoint
@@ -753,21 +756,7 @@ async def generate_chat_completion(
         
         # Replace the original payload
         payload = new_payload
-        #print(f"Transformed payload: {payload}")
-
-    # Remove the duplicate o-series check since we already handled it above
-    # Check if model is from "o" series
-    # is_o_series = payload["model"].lower().startswith(("o1", "o3", "o4"))
-    # if is_o_series:
-    #     payload = openai_o_series_handler(payload)
-    # elif "api.openai.com" not in url:
-    #     # Remove "max_completion_tokens" from the payload for backward compatibility
-    #     if "max_completion_tokens" in payload:
-    #         payload["max_tokens"] = payload["max_completion_tokens"]
-    #         del payload["max_completion_tokens"]
-
-    # if "max_tokens" in payload and "max_completion_tokens" in payload:
-    #     del payload["max_tokens"]
+        print(f"Transformed payload: {payload}")
 
     # Convert the modified body back to JSON
     if "logit_bias" in payload:
@@ -820,14 +809,78 @@ async def generate_chat_completion(
         # Check if response is SSE
         if "text/event-stream" in r.headers.get("Content-Type", ""):
             streaming = True
-            return StreamingResponse(
-                r.content,
-                status_code=r.status,
-                headers=dict(r.headers),
-                background=BackgroundTask(
-                    cleanup_response, response=r, session=session
+            
+            # If it's from /responses endpoint, we need to transform the streaming response
+            if endpoint == "responses":
+                async def transform_streaming_response():
+                    async for chunk in r.content:
+                        # Parse the chunk as JSON
+                        try:
+                            data = json.loads(chunk.decode('utf-8').replace('data: ', ''))
+                            
+                            # Transform the chunk to chat/completions format
+                            if "output" in data:
+                                # Extract content from the output structure
+                                output = data.get("output", [])
+                                if isinstance(output, list):
+                                    for output_item in output:
+                                        if (isinstance(output_item, dict) and 
+                                            output_item.get("type") == "message" and 
+                                            output_item.get("role") == "assistant"):
+                                            
+                                            content = output_item.get("content", [])
+                                            if isinstance(content, list):
+                                                for content_item in content:
+                                                    if (isinstance(content_item, dict) and 
+                                                        content_item.get("type") == "output_text"):
+                                                        # Transform to chat/completions format
+                                                        transformed_chunk = {
+                                                            "choices": [{
+                                                                "delta": {
+                                                                    "content": content_item.get("text", "")
+                                                                }
+                                                            }]
+                                                        }
+                                                        yield f"data: {json.dumps(transformed_chunk)}\n\n"
+                                                        break
+                                                break
+                                    break
+                                elif isinstance(output, str):
+                                    # Direct string output
+                                    transformed_chunk = {
+                                        "choices": [{
+                                            "delta": {
+                                                "content": output
+                                            }
+                                        }]
+                                    }
+                                    yield f"data: {json.dumps(transformed_chunk)}\n\n"
+                            else:
+                                # Pass through other chunks unchanged
+                                yield chunk
+                                
+                        except json.JSONDecodeError:
+                            # Pass through non-JSON chunks (like [DONE])
+                            yield chunk
+                
+                return StreamingResponse(
+                    transform_streaming_response(),
+                    status_code=r.status,
+                    headers=dict(r.headers),
+                    background=BackgroundTask(
+                        cleanup_response, response=r, session=session
+                    )
                 )
-            )
+            else:
+                # Regular streaming response (not from /responses)
+                return StreamingResponse(
+                    r.content,
+                    status_code=r.status,
+                    headers=dict(r.headers),
+                    background=BackgroundTask(
+                        cleanup_response, response=r, session=session
+                    )
+                )
              
         else:
             try:

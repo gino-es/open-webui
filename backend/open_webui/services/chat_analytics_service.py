@@ -1,4 +1,5 @@
 import logging
+import os
 import json
 import sqlglot
 import time
@@ -28,7 +29,7 @@ class ChatAnalyticsService:
         self.allowed_tables = ["user", "chat", "daily_report"]
         self.tool_types = ["SQL_QUERY", "VECTOR_SEARCH"]
 
-        self.control_llm = ChatOpenAI(model="gpt-4.1", temperature=0)
+        self.control_llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4.1"), temperature=0)
         # self.answer_llm = ChatOpenAI(model=model_id, temperature=0.1)
 
     def _truncate_conversation_context(self, conversation_context: List[Dict[str, Any]], max_chars_per_message: int = 500) -> List[Dict[str, Any]]:

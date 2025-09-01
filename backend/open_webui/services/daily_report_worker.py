@@ -23,15 +23,17 @@ class DailyReportWorker:
         self.stop_event = threading.Event()
         self.processing_lock = threading.Lock()  
         
-        self.daily_processing_hour = 1 # 1 AM
-        self.daily_processing_minute = 0
+        self.daily_processing_hour = 18 
+        self.daily_processing_minute = 18
         self.tolerance_minutes = 2
         self.sleep_interval = 30  
 
         self.last_processed_date = None
         self.max_tokens_per_chunk = 4000 
         self.process_interval = 60
-        
+
+        self.groq_models = None
+        self.model_index = 0
     
     def get_llm_client(self):
         """Get or create Groq LLM client"""
@@ -48,9 +50,7 @@ class DailyReportWorker:
         return (datetime.now() - timedelta(days=1)).date()
     
     def is_time_to_process(self) -> bool:
-        """Check if it's time to process daily reports with tolerance"""
         now = datetime.now()
-        
         target_time = now.replace(hour=self.daily_processing_hour, 
                                 minute=self.daily_processing_minute, 
                                 second=0, microsecond=0)
@@ -65,17 +65,7 @@ class DailyReportWorker:
         """Check if we should process today (avoid duplicate processing)"""
         current_date = datetime.now().date()
         
-        # If we haven't processed today yet, we can process
-        if self.last_processed_date != current_date:
-            return True
-        
-        # If we have processed today, check if it's been more than 23 hours
-        if hasattr(self, 'last_processing_time'):
-            time_since_last = datetime.now() - self.last_processing_time
-            if time_since_last.total_seconds() > 23 * 3600:  # 23 hours
-                return True
-        
-        return False
+        return self.last_processed_date != current_date
     
     def get_next_chat_needing_report(self, target_date: date) -> Optional[Dict[str, Any]]:
         """Get the next single chat that needs a daily report"""
@@ -197,7 +187,7 @@ class DailyReportWorker:
         """Split long conversations into manageable chunks for AI analysis"""
         if not messages:
             return []
-        
+    
         # Combine all messages into one conversation text
         full_conversation = ""
         for msg in messages:
@@ -251,29 +241,60 @@ class DailyReportWorker:
         
         return chunks
     
-    def generate_ai_analysis_with_fallback(self, conversation_chunks: List[str]) -> str:
+    def generate_ai_analysis(self, conversation_chunks: List[str]) -> str:
         """Generate AI analysis using multiple models with fallback"""
-        try:
-            llm_client = self.get_llm_client()
-            if not llm_client:
-                return "AI analysis not available (LLM client not configured)"
-            
-            # Get fallback models from environment
-            groq_models = os.getenv("GROQ_MODEL_IDS", "llama3.1-8b-instant").split(",")
-            
+        try:            
             if len(conversation_chunks) == 1:
-                # Single chunk - try multiple models
-                return self._analyze_single_chunk_with_fallback(conversation_chunks[0], llm_client, groq_models)
+                return self._analyze_single_chunk(conversation_chunks[0])
             else:
-                # Multiple chunks - analyze each and synthesize
-                return self._analyze_multiple_chunks_with_fallback(conversation_chunks, llm_client, groq_models)
+                return self._analyze_multiple_chunks(conversation_chunks)
                 
         except Exception as e:
             log.error(f"Error generating AI analysis: {e}")
             return f"AI analysis failed: {str(e)}"
     
-    def _analyze_single_chunk_with_fallback(self, conversation: str, llm_client, groq_models: List[str], 
-                                      previous_chunk_context: str = "", chunk_position: str = "") -> str:
+    def _try_openai_fallback(self, messages: List[Dict[str, str]], formatted_prompt: str) -> Optional[str]:
+        """Try OpenAI as a fallback when Groq models fail"""
+        try:
+            import requests
+            
+            # Get OpenAI configuration from environment
+            openai_api_key = os.getenv("OPENAI_API_KEY")
+            openai_base_url = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
+            model = os.getenv("OPENAI_MODEL", "gpt-4.1")
+            
+            if not openai_api_key:
+                log.warning("OPENAI_API_KEY not set, cannot use OpenAI fallback")
+                return None
+            
+            # Simple POST request
+            response = requests.post(
+                f"{openai_base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {openai_api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": formatted_prompt}],
+                },
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                analysis = result["choices"][0]["message"]["content"].strip()
+                if analysis:
+                    log.info(f"OpenAI fallback successful using {model}")
+                    return analysis
+            else:
+                log.warning(f"OpenAI API request failed with status {response.status_code}")
+                
+        except Exception as e:
+            log.warning(f"OpenAI fallback failed: {e}")
+        
+        return None
+
+    def _analyze_single_chunk(self, conversation: str, previous_chunk_context: str = "", chunk_position: str = "") -> str:
         """Analyze a single conversation chunk with model fallback"""
         formatted_prompt = DAILY_REPORT_PROMPT.format(
             conversation=conversation,
@@ -283,19 +304,14 @@ class DailyReportWorker:
         
         messages = [{"role": "user", "content": formatted_prompt}]
         
-        # Try each model in order
-        for model in groq_models:
-            model = model.strip()
-            if not model:
-                continue
-                
+        # Try each model
+        for i in range(len(self.groq_models)):
             try:
+                model = self.groq_models[self.model_index]
                 log.debug(f"Trying Groq model '{model}' for conversation analysis")
-                response = llm_client.chat.completions.create(
+                response = self.get_llm_client().chat.completions.create(
                     model=model,
                     messages=messages,
-                    max_tokens=800,
-                    temperature=0.3
                 )
                 
                 analysis = response.choices[0].message.content.strip()
@@ -305,14 +321,21 @@ class DailyReportWorker:
                     
             except Exception as e:
                 log.warning(f"Groq model '{model}' failed: {e}")
+                self.model_index = (self.model_index + 1) % len(self.groq_models)
                 continue
         
-        # If all models fail, return default analysis
-        log.warning("All Groq models failed, using default analysis")
+        # If all Groq models fail, try OpenAI as fallback
+        log.warning("All Groq models failed, trying OpenAI fallback...")
+        openai_analysis = self._try_openai_fallback(messages, formatted_prompt)
+        
+        if openai_analysis:
+            return openai_analysis
+        
+        # If OpenAI also fails, return default analysis
+        log.warning("OpenAI fallback failed, analysis unavailable")
         return "Analysis unavailable due to technical issues"
     
-    def _analyze_multiple_chunks_with_fallback(self, conversation_chunks: List[str], llm_client, groq_models: List[str]) -> str:
-        """Analyze multiple chunks with model fallback and synthesize"""
+    def _analyze_multiple_chunks(self, conversation_chunks: List[str]) -> str:
         current_analysis = ""
         
         for i, chunk in enumerate(conversation_chunks):
@@ -327,10 +350,9 @@ class DailyReportWorker:
                 """
             
             # Send chunk with context of current analysis
-            analysis = self._analyze_single_chunk_with_fallback(
-                chunk, llm_client, groq_models, 
+            analysis = self._analyze_single_chunk(
+                chunk,
                 previous_chunk_context=previous_context,
-                chunk_position=f"{i+1}/{len(conversation_chunks)}"
             )
             
             # Update current analysis with new insights
@@ -340,7 +362,7 @@ class DailyReportWorker:
                 time.sleep(self.process_interval)
         
         # Return the final comprehensive analysis
-        return current_analysis            
+        return current_analysis
     
     def process_single_chat(self, chat: Dict[str, Any], target_date: date) -> bool:
         """Process a single chat and generate its daily report"""
@@ -349,7 +371,7 @@ class DailyReportWorker:
             user_id = chat['user_id']
             
             log.info(f"Processing daily report for chat {chat_id} ...")
-            
+
             # Get all messages for analysis
             messages_data = self.get_chat_messages_for_analysis(chat_id, target_date)
             if not messages_data or not messages_data['messages']:
@@ -365,7 +387,7 @@ class DailyReportWorker:
             log.info(f"Split conversation into {len(conversation_chunks)} chunks for analysis")
             
             # Generate AI-powered analysis with fallback
-            conversation_analysis = self.generate_ai_analysis_with_fallback(conversation_chunks)
+            conversation_analysis = self.generate_ai_analysis(conversation_chunks)
             
             # Create report form
             report_form = DailyReportForm(
@@ -389,7 +411,9 @@ class DailyReportWorker:
     
     def process_daily_reports(self, target_date: date):
         try:
-            log.info(f"Starting daily report processing for {target_date}")
+            
+            self.groq_models = os.getenv("GROQ_MODEL_IDS", "llama3.1-8b-instant").split(",")
+            self.model_index = 0
             processed_count = 0
 
             while True:
@@ -404,7 +428,6 @@ class DailyReportWorker:
                     log.info(f"No more chats need reports for {target_date}")
                     break
                 
-
                 if self.process_single_chat(chat, target_date):
                     processed_count += 1
                     log.info(f"Processed chat {chat['chat_id']} for {target_date}")
@@ -455,11 +478,12 @@ class DailyReportWorker:
                         
                         self.last_processed_date = datetime.now().date()
                         self.last_processing_time = datetime.now()
+                        log.info(f"Daily report processing started at {self.last_processing_time}")
                         
                         yesterday = self.get_yesterday_date()
                         self.process_daily_reports(yesterday)
                         
-                        log.info(f"Daily report processing completed for {yesterday}")
+                        log.info(f"Daily report processing completed at  {datetime.now()}")
                 
                 self.stop_event.wait(self.sleep_interval)
                 

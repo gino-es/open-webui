@@ -471,12 +471,12 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(periodic_usage_pool_cleanup())
 
     # ✅ Add daily report worker startup here
-    daily_report_worker.start()
+    # daily_report_worker.start()
 
     yield
     
     # ✅ Add daily report worker shutdown here
-    daily_report_worker.stop()
+    # daily_report_worker.stop()
 
 
 app = FastAPI(

@@ -170,23 +170,53 @@ Examples:
 Response:
 """
 
-DAILY_REPORT_PROMPT = """
-You are an experienced executive secretary tasked with writing daily conversation reports. Your job is to analyze user-AI interactions and provide concise, professional insights that highlight what matters most.
+# DAILY_REPORT_PROMPT = """
+# You are an experienced executive secretary tasked with writing daily conversation reports. Your job is to analyze user-AI interactions and provide concise, professional insights that highlight what matters most.
+# 
+# {chunk_position}
+# 
+# {previous_context}
+# 
+# CONVERSATION TO ANALYZE:
+# {conversation}
+# 
+# TASK: Write a concise paragraph that captures the most important aspects of this conversation segment. Focus on:
+# 
+# • What was accomplished or attempted
+# • list additional insights from user struggles and how the AI could have helped them in bullet point that is easily digestible.
+# 
+# Write in a professional, executive summary style. Be concise but insightful. If this is part of a longer conversation, reference previous context appropriately.
+# 
+# Important Note:
+# - The conversation is not always in a full context, so you need to use the previous context to fully understand the conversation and this current analysis will also be use in the next chunk.
+#   So keep addon or modify the previous context so that the final analysis will contain all the context
+# 
+# Your analysis:
+# """
 
-{chunk_position}
+DAILY_REPORT_PROMPT = """
+You are an experienced executive secretary tasked with writing daily conversation reports. 
+Your job is to analyze user-AI interactions and provide concise, professional insights that highlight what matters most.
 
 {previous_context}
 
 CONVERSATION TO ANALYZE:
 {conversation}
 
-TASK: Write a concise paragraph (2-3 sentences) that captures the most important aspects of this conversation segment. Focus on:
+TASK: Write a concise, standalone executive summary that captures the most important aspects of the entire conversation so far, 
+not just the latest part. Your summary should read naturally on its own, without requiring the reader to see earlier analyses. 
 
-• What was accomplished or attempted
-• How effectively the user and AI worked together
-• Any notable patterns or insights that emerged
+Focus on:
+• What the user attempted or accomplished across the conversation
+• List The key challenges or struggles users faced and listed as clear, actionable bullet points
 
-Write in a professional, executive summary style. Be concise but insightful. If this is part of a longer conversation, reference previous context appropriately.
+Important Notes:
+- Only describe successes when the conversation clearly shows the user confirmed resolution.
+- If the outcome is uncertain, phrase it as "the user attempted" or "the user worked on," rather than "successfully accomplished."
+- Do not assume anything. Only describe what is explicitly stated in the conversation.
+- Always integrate the previous context into a single flowing summary, so the analysis evolves to cover the whole story so far.
+- Avoid transitional phrases like "building on previous issues"; instead, present the conversation as a unified whole.
+- Each analysis must sound natural and complete as if it were the final report.
 
 Your analysis:
 """
