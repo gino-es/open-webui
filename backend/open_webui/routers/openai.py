@@ -699,8 +699,17 @@ async def generate_chat_completion(
         reasoning_summary = reasoning_config.get("summary", "auto")
         background_enabled = responses_config.get("background", False)
         stream_enabled = responses_config.get("stream", False)
+        verbosity = responses_config.get("verbosity", "medium")
+        tools = responses_config.get("tools", "[]")
         
-        # print(f"[DEBUG] Responses config: enabled={config_enabled}, reasoning={reasoning_enabled}, background={background_enabled}, stream={stream_enabled}")
+        # Parse tools from string to JSON array
+        try:
+            tools_list = json.loads(tools) if tools else []
+        except json.JSONDecodeError:
+            log.warning(f"Invalid tools JSON: {tools}")
+            tools_list = []
+        
+        # print(f"[DEBUG] Responses config: enabled={config_enabled}, reasoning={reasoning_enabled}, background={background_enabled}, stream={stream_enabled}, verbosity={verbosity}, tools={tools}")
         
         # Transform messages to the format expected by /responses
         messages = payload["messages"]
@@ -745,9 +754,10 @@ async def generate_chat_completion(
             "text": {
                 "format": {
                     "type": "text"
-                }
+                },
+                "verbosity": verbosity
             },
-            "tools": [],
+            "tools": tools_list,  # Use parsed JSON array instead of string
             "store": True,
             "background": background_enabled,
             "stream": stream_enabled
@@ -764,10 +774,8 @@ async def generate_chat_completion(
         
         # Remove None values
         new_payload = {k: v for k, v in new_payload.items() if v is not None}
-        
-        # Replace the original payload
         payload = new_payload
-        print(f"Transformed payload: {payload}")
+        # print(f"Transformed payload: {payload}")
 
     # Convert the modified body back to JSON
     if "logit_bias" in payload:
@@ -907,24 +915,43 @@ async def generate_chat_completion(
                     # Extract the assistant's message from the response
                     assistant_message = "No response generated"
                     
+                    # Debug the response structure
+                    # print(f"[DEBUG] Response status: {response.get('status')}")
+                    # print(f"[DEBUG] Response output type: {type(response.get('output'))}")
+                    # print(f"[DEBUG] Response output length: {len(response.get('output', []))}")
+                    
                     # Safely navigate the response structure
                     output = response.get("output", [])
                     if isinstance(output, list):
-                        for output_item in output:
+                        # print(f"[DEBUG] Processing {len(output)} output items")
+                        for i, output_item in enumerate(output):
+                            # print(f"[DEBUG] Output item {i}: type={output_item.get('type')}, role={output_item.get('role')}")
+                            
                             if (isinstance(output_item, dict) and 
                                 output_item.get("type") == "message" and 
                                 output_item.get("role") == "assistant"):
                                 
+                                # print(f"[DEBUG] Found assistant message in item {i}")
                                 content = output_item.get("content", [])
+                                # print(f"[DEBUG] Content type: {type(content)}, length: {len(content) if isinstance(content, list) else 'N/A'}")
+                                
                                 if isinstance(content, list):
-                                    for content_item in content:
+                                    for j, content_item in enumerate(content):
+                                        # print(f"[DEBUG] Content item {j}: type={content_item.get('type')}")
+                                        
                                         if (isinstance(content_item, dict) and 
                                             content_item.get("type") == "output_text"):
+                                            
                                             assistant_message = content_item.get("text", "")
+                                            # print(f"[DEBUG] Extracted text: {assistant_message[:100]}...")
                                             break
-                                break
+                                    break
+
+                        # print(f"[DEBUG] Output is not a list: {type(output)}")
                     
-                    # Transform to chat/completions format (keep the original markup)
+                    # print(f"[DEBUG] Final assistant_message: {assistant_message[:100]}...")
+                    
+                    # Transform to chat/completions format
                     transformed_response = {
                         "id": response.get("id", ""),
                         "object": "chat.completion",
