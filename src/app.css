@@ -97,7 +97,7 @@ li p {
 
 ::-webkit-scrollbar-thumb {
 	--tw-border-opacity: 1;
-	background-color: rgba(236, 236, 236, 0.8);
+	background-color: rgba(251, 146, 60, 0.8); /* Orange color */
 	border-color: rgba(255, 255, 255, var(--tw-border-opacity));
 	border-radius: 9999px;
 	border-width: 1px;
@@ -105,7 +105,7 @@ li p {
 
 /* Dark theme scrollbar styles */
 .dark ::-webkit-scrollbar-thumb {
-	background-color: rgba(42, 42, 42, 0.8); /* Darker color for dark theme */
+	background-color: rgba(249, 115, 22, 0.8); /* Darker orange for dark theme */
 	border-color: rgba(0, 0, 0, var(--tw-border-opacity));
 }
 

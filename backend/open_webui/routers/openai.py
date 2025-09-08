@@ -770,7 +770,7 @@ async def generate_chat_completion(
                 "summary": reasoning_summary if reasoning_summary else "auto"
             }
         
-        print(f"[DEBUG] /responses payload: {new_payload}")
+        # print(f"[DEBUG] /responses payload: {new_payload}")
         
         # Remove None values
         new_payload = {k: v for k, v in new_payload.items() if v is not None}
@@ -832,55 +832,105 @@ async def generate_chat_completion(
             # If it's from /responses endpoint, we need to transform the streaming response
             if endpoint == "responses":
                 async def transform_streaming_response():
-                    async for chunk in r.content:
-                        # Parse the chunk as JSON
-                        try:
-                            data = json.loads(chunk.decode('utf-8').replace('data: ', ''))
+                    buffer = ""
+                    chunk_count = 0
+                    # print(f"[DEBUG] Starting /responses streaming transformation")
+                    
+                    try:
+                        async for chunk in r.content:
+                            chunk_count += 1
+                            # Decode the chunk
+                            chunk_str = chunk.decode('utf-8')
+                            buffer += chunk_str
                             
-                            # Transform the chunk to chat/completions format
-                            if "output" in data:
-                                # Extract content from the output structure
-                                output = data.get("output", [])
-                                if isinstance(output, list):
-                                    for output_item in output:
-                                        if (isinstance(output_item, dict) and 
-                                            output_item.get("type") == "message" and 
-                                            output_item.get("role") == "assistant"):
-                                            
-                                            content = output_item.get("content", [])
-                                            if isinstance(content, list):
-                                                for content_item in content:
-                                                    if (isinstance(content_item, dict) and 
-                                                        content_item.get("type") == "output_text"):
-                                                        # Transform to chat/completions format
-                                                        transformed_chunk = {
-                                                            "choices": [{
-                                                                "delta": {
-                                                                    "content": content_item.get("text", "")
-                                                                }
-                                                            }]
-                                                        }
-                                                        yield f"data: {json.dumps(transformed_chunk)}\n\n"
-                                                        break
-                                                break
-                                    break
-                                elif isinstance(output, str):
-                                    # Direct string output
-                                    transformed_chunk = {
-                                        "choices": [{
-                                            "delta": {
-                                                "content": output
-                                            }
-                                        }]
-                                    }
-                                    yield f"data: {json.dumps(transformed_chunk)}\n\n"
-                            else:
-                                # Pass through other chunks unchanged
-                                yield chunk
+                            # print(f"[DEBUG] Chunk #{chunk_count}: raw_length={len(chunk)}, decoded_length={len(chunk_str)}")
+                            
+                            # Process complete lines
+                            while '\n' in buffer:
+                                line, buffer = buffer.split('\n', 1)
+                                line = line.strip()
                                 
-                        except json.JSONDecodeError:
-                            # Pass through non-JSON chunks (like [DONE])
-                            yield chunk
+                                if not line:
+                                    continue
+                                    
+                                # Handle SSE format
+                                if line.startswith('data: '):
+                                    data_content = line[6:]  # Remove 'data: ' prefix
+                                    
+                                    if data_content == '[DONE]':
+                                        #print(f"[DEBUG] Received [DONE] signal")
+                                        yield f"data: [DONE]\n\n"
+                                        continue
+                                    
+                                    try:
+                                        data = json.loads(data_content)
+                                        #print(f"[DEBUG] Parsed JSON data type: {data.get('type', 'unknown')}")
+                                        
+                                        # Handle different response types from /responses endpoint
+                                        if data.get("type") == "response.output_text.delta":
+                                            # Extract delta content for streaming
+                                            delta_content = data.get("delta", "")
+                                            # print(f"[DEBUG] Delta content: {repr(delta_content)}")
+                                            
+                                            if delta_content:
+                                                # Transform to chat/completions format
+                                                transformed_chunk = {
+                                                    "choices": [{
+                                                        "delta": {
+                                                            "content": delta_content
+                                                        }
+                                                    }]
+                                                }
+                                                # print(f"[DEBUG] Transformed delta chunk: {json.dumps(transformed_chunk, indent=2)}")
+                                                yield f"data: {json.dumps(transformed_chunk)}\n\n"
+                                                
+                                        elif data.get("type") == "response.completed":
+                                            # Just signal completion, don't send content again
+                                            # The content was already sent via delta chunks
+                                            final_chunk = {
+                                                "choices": [{
+                                                    "delta": {},
+                                                    "finish_reason": "stop"
+                                                }]
+                                            }
+                                            yield f"data: {json.dumps(final_chunk)}\n\n"
+                                            yield "data: [DONE]\n\n"
+                                            return
+                                            
+                                        else:
+                                            # Pass through other response types unchanged
+                                            # print(f"[DEBUG] Passing through other response type: {data.get('type', 'unknown')}")
+                                            yield f"data: {data_content}\n\n"
+                                            
+                                    except json.JSONDecodeError as e:
+                                        print(f"[DEBUG] JSON decode error: {e}")
+                                        print(f"[DEBUG] Failed to parse: {repr(data_content)}")
+                                        # Pass through non-JSON chunks
+                                        yield f"data: {data_content}\n\n"
+                                    except Exception as e:
+                                        print(f"[DEBUG] Unexpected error processing data: {e}")
+                                        print(f"[DEBUG] Error type: {type(e)}")
+                                        # Pass through on error
+                                        yield f"data: {data_content}\n\n"
+                                else:
+                                    # Pass through non-data lines (like event: lines)
+                                    # print(f"[DEBUG] Passing through non-SSE line: {repr(line)}")
+                                    yield f"{line}\n"
+                        
+                        # Handle any remaining buffer content
+                        if buffer.strip():
+                            # print(f"[DEBUG] Processing remaining buffer: {repr(buffer)}")
+                            yield buffer
+                            
+                        # print(f"[DEBUG] Streaming transformation completed. Total chunks processed: {chunk_count}")
+                        
+                    except Exception as e:
+                        print(f"[DEBUG] Error in streaming transformation: {e}")
+                        print(f"[DEBUG] Error type: {type(e)}")
+                        import traceback
+                        print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+                        # Re-raise the exception to maintain error handling
+                        raise
                 
                 return StreamingResponse(
                     transform_streaming_response(),
@@ -905,7 +955,7 @@ async def generate_chat_completion(
             try:
                 response = await r.json()
                 # print(f"=== RESPONSE FROM OPENAI ===")
-                # print(f"Status: {r.status}")
+                # print(f"Status: {r.status}
                 # print(f"Response: {json.dumps(response, indent=2)}")
                 
                 # Transform response if it's from /responses endpoint

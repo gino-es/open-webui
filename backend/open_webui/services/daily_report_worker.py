@@ -23,8 +23,8 @@ class DailyReportWorker:
         self.stop_event = threading.Event()
         self.processing_lock = threading.Lock()  
         
-        self.daily_processing_hour = 18 
-        self.daily_processing_minute = 18
+        self.daily_processing_hour = 1 
+        self.daily_processing_minute = 0
         self.tolerance_minutes = 2
         self.sleep_interval = 30  
 
